@@ -109,7 +109,7 @@ docs/             English documentation
 
 Read [AGENTS.md](AGENTS.md) before changing code. Use Conventional Commits and keep repository content in English. Architecture changes also require an update to the Feishu design document.
 
-Sceadu is developed under the `imloriskong` GitHub account. See [docs/github-accounts.md](docs/github-accounts.md) for SSH setup and the account-switch helper.
+Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com`). See [docs/github-accounts.md](docs/github-accounts.md) for SSH setup and the account-switch helper.
 
 ## Security
 

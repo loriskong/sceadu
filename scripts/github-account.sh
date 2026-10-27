@@ -10,10 +10,12 @@
 SCEADU_IMLORISKONG_NAME="${SCEADU_IMLORISKONG_NAME:-imloriskong}"
 SCEADU_IMLORISKONG_EMAIL="${SCEADU_IMLORISKONG_EMAIL:-imloriskong@gmail.com}"
 SCEADU_IMLORISKONG_KEY="${SCEADU_IMLORISKONG_KEY:-$HOME/.ssh/id_ed25519_imloriskong}"
+SCEADU_IMLORISKONG_GITHUB="${SCEADU_IMLORISKONG_GITHUB:-loriskong}"
 
 SCEADU_VALAXKONG_NAME="${SCEADU_VALAXKONG_NAME:-valaxkong}"
 SCEADU_VALAXKONG_EMAIL="${SCEADU_VALAXKONG_EMAIL:-valaxkong@163.com}"
 SCEADU_VALAXKONG_KEY="${SCEADU_VALAXKONG_KEY:-$HOME/.ssh/id_ed25519}"
+SCEADU_VALAXKONG_GITHUB="${SCEADU_VALAXKONG_GITHUB:-valaxkong}"
 
 github_use() {
   account="$1"
@@ -22,11 +24,13 @@ github_use() {
       name="$SCEADU_IMLORISKONG_NAME"
       email="$SCEADU_IMLORISKONG_EMAIL"
       key="$SCEADU_IMLORISKONG_KEY"
+      github="$SCEADU_IMLORISKONG_GITHUB"
       ;;
     valaxkong)
       name="$SCEADU_VALAXKONG_NAME"
       email="$SCEADU_VALAXKONG_EMAIL"
       key="$SCEADU_VALAXKONG_KEY"
+      github="$SCEADU_VALAXKONG_GITHUB"
       ;;
     *)
       printf 'usage: github_use imloriskong|valaxkong\n' >&2
@@ -39,13 +43,14 @@ github_use() {
   export GIT_COMMITTER_NAME="$name"
   export GIT_COMMITTER_EMAIL="$email"
   export GIT_SSH_COMMAND="ssh -i \"$key\" -o IdentitiesOnly=yes"
+  export SCEADU_GITHUB_USER="$github"
 
   if git rev-parse --git-dir >/dev/null 2>&1; then
     git config --local user.name "$name"
     git config --local user.email "$email"
   fi
 
-  printf 'GitHub account: %s <%s>\n' "$account" "$email"
+  printf 'GitHub account: %s (github.com/%s) <%s>\n' "$account" "$github" "$email"
   printf 'SSH key: %s\n' "$key"
   if [ ! -f "$key" ]; then
     printf 'warning: SSH key not found; create it before pushing\n' >&2

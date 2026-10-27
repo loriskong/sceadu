@@ -1,10 +1,10 @@
 # GitHub Accounts
 
-Sceadu is developed under the `imloriskong` GitHub account. The `valaxkong` account is reserved for the robot projects on the same machine. Both identities can coexist: the switch only affects the current shell and, inside a repository, its local Git config.
+Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com`). The `valaxkong` account is reserved for the robot projects on the same machine. Both identities can coexist: the switch only affects the current shell and, inside a repository, its local Git config.
 
-| Account | Email | SSH key |
-|---|---|---|
-| `imloriskong` | `imloriskong@gmail.com` | `~/.ssh/id_ed25519_imloriskong` |
+| Local key | GitHub user | Email | SSH key |
+|---|---|---|---|
+| `imloriskong` | `loriskong` | `imloriskong@gmail.com` | `~/.ssh/id_ed25519_imloriskong` |
 | `valaxkong` | `valaxkong@163.com` | `~/.ssh/id_ed25519` |
 
 The key paths and names can be overridden with `SCEADU_<ACCOUNT>_NAME`, `SCEADU_<ACCOUNT>_EMAIL`, and `SCEADU_<ACCOUNT>_KEY`.
@@ -62,7 +62,7 @@ git add .
 git commit -m "chore: initialize Sceadu"
 
 # 4. Add the empty GitHub repository and push.
-git remote add origin git@github.com:imloriskong/sceadu.git
+git remote add origin git@github.com:loriskong/sceadu.git
 git push -u origin main
 ```
 

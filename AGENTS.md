@@ -43,7 +43,7 @@ Any change to these requires an explicit decision in the design document.
 
 ## GitHub identity
 
-Sceadu is developed under the `imloriskong` GitHub account. The `valaxkong` account is reserved for other projects on the same machine.
+Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com`). The `valaxkong` account is reserved for other projects on the same machine.
 
 - Switch identities with `. ./scripts/github-account.sh` and `github_use imloriskong`.
 - Never commit credentials, SSH private keys, or tokens.

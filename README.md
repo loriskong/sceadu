@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M0).** The architecture is defined; the CLI and wire protocol are being implemented. The commands below describe the intended interface and may change.
+> **Status: pre-alpha (M1).** The Rust workspace, Ed25519 identity, and signed manifest types are in place. Persistent keystore, libp2p sessions, and discovery are in progress.
 
 ## What it does
 
@@ -44,12 +44,18 @@ Architecture sections are maintained manually. Until CI sync is enabled, run the
 
 ## Build
 
-The Cargo workspace is added in M1. The toolchain is installed in the workspace, so source the environment first:
+The toolchain is installed in the workspace, so source the environment first:
 
 ```sh
 . ./scripts/env.sh
 cargo build --release
 cargo test --all
+```
+
+Run the CLI from the workspace:
+
+```sh
+cargo run -p sceadu-cli -- --help
 ```
 
 ## Install
@@ -64,29 +70,31 @@ No installer exists yet. Do not expect the commands above to work at M0.
 
 ## Usage
 
-The following commands are the planned CLI contract for M1-M3:
+Current commands in the M1 scaffold:
 
 ```sh
-# Create or load the local identity.
+# Generate an ephemeral development identity and print its AgentID.
+cargo run -p sceadu-cli -- dev-id
+
+# Sign a development manifest with an ephemeral identity.
+cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
+
+# Verify a manifest JSON file.
+cargo run -p sceadu-cli -- verify manifest.json
+```
+
+The `dev-*` commands are deliberately ephemeral. The persistent keystore, `sceadu init`, `sceadu daemon`, discovery, and task commands are planned for the rest of M1-M3:
+
+```sh
 sceadu init
-
-# Start the background node.
 sceadu daemon start
-
-# Show node status as JSON.
 sceadu status --json
-
-# Find agents that advertise a capability.
 sceadu discover --capability task.echo --json
-
-# Send a task to a discovered agent.
 sceadu ask --capability task.echo --input '{"text":"hello"}' --json
-
-# Install the agent skill.
 sceadu skill install
 ```
 
-All commands are designed to support `--json` for agent consumption.
+All planned commands support `--json` for agent consumption.
 
 ## Update
 

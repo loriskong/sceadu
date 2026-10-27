@@ -1,0 +1,15 @@
+[package]
+name = "sceadu-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Core identity and manifest types for Sceadu"
+
+[dependencies]
+base64.workspace = true
+bs58.workspace = true
+ciborium.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+thiserror.workspace = true

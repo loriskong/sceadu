@@ -1,0 +1,16 @@
+[package]
+name = "sceadu-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Sceadu command-line client"
+
+[[bin]]
+name = "sceadu"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+sceadu-core = { path = "../sceadu-core" }
+serde_json.workspace = true

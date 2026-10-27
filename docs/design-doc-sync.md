@@ -84,7 +84,8 @@ The job fails if:
 - a required secret is missing;
 - the Feishu app cannot obtain a tenant token;
 - the app lacks the docx scopes or edit permission;
-- the append request returns `ok: false`.
+- the append request returns `ok: false`;
+- the append request returns `ok: true` but `data.result` is not `success` (Feishu can report permission failures this way).
 
 Do not mark the job as successful when the document was not updated. A red workflow is the signal that the design document is drifting.
 

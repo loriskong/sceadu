@@ -36,11 +36,16 @@ impl AgentId {
     pub fn to_base58(&self) -> String {
         bs58::encode(self.0.as_bytes()).into_string()
     }
+
+    /// Multibase base58btc representation (`z` prefix).
+    pub fn to_multibase(&self) -> String {
+        format!("z{}", self.to_base58())
+    }
 }
 
 impl fmt::Display for AgentId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}{}", AGENT_ID_PREFIX, self.to_base58())
+        write!(formatter, "{}{}", AGENT_ID_PREFIX, self.to_multibase())
     }
 }
 
@@ -51,6 +56,7 @@ impl FromStr for AgentId {
         let encoded = value
             .strip_prefix(AGENT_ID_PREFIX)
             .ok_or(Error::InvalidAgentId)?;
+        let encoded = encoded.strip_prefix('z').ok_or(Error::InvalidAgentId)?;
         let bytes = bs58::decode(encoded)
             .into_vec()
             .map_err(|_| Error::InvalidAgentId)?;
@@ -123,7 +129,7 @@ mod tests {
         let agent_id = identity.agent_id();
         let text = agent_id.to_string();
 
-        assert!(text.starts_with(AGENT_ID_PREFIX));
+        assert!(text.starts_with("aan:z"));
         assert_eq!(text.parse::<AgentId>().unwrap(), agent_id);
     }
 

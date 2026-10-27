@@ -160,6 +160,11 @@ def main() -> None:
     if not payload.get("ok"):
         die(f"design document update was rejected: {json.dumps(payload)[:400]}")
 
+    result = payload.get("data", {}).get("result")
+    if result not in (None, "success"):
+        warnings = payload.get("data", {}).get("warnings", [])
+        die(f"design document update failed: result={result!r}; warnings={warnings}")
+
     print(f"appended {short_sha} to the design document")
 
 

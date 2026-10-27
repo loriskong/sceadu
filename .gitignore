@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+/.cargo/
+/.rustup/
+**/*.rs.bk
+**/*.pdb
+
+# Local design working copies (Chinese source for the Feishu design document)
+/.design/
+
+# Local agent overrides
+AGENTS.local.md
+CLAUDE.local.md
+
+# Secrets and local state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+.sceadu/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+
+# Python helper caches
+__pycache__/
+*.pyc

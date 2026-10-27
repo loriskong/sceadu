@@ -1,0 +1,88 @@
+# Sceadu Agent Instructions
+
+This file is loaded by DSH-compatible agents as project context. Keep it accurate and in English.
+
+## Project
+
+Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, discover each other through a structured DHT plus agent-mediated neighbor discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
+
+Current stage: pre-alpha (M0/M1). The MVP is defined in section 4.3 of the design document.
+
+## Sources of truth
+
+- Design intent: the Feishu document "Sceadu Design Document" (Chinese): https://edoxkf0rcr.feishu.cn/docx/Q9v6dLkF7oLxbrxncowcrDJInte
+- Code and implementation details: this repository.
+- If they conflict, the design document wins for intent. Record the change in the document and update this repository.
+
+## Language policy
+
+- All repository content is English: code, comments, identifiers, commit messages, README, docs, tests, CI, and issue/PR text.
+- The Feishu design document is Chinese. Do not commit Chinese design documents or generated exports to this repository.
+- Local working copies of the design document may live in `.design/`, which is git-ignored.
+- CLI output is English by default; localization is a later feature.
+
+## Locked MVP decisions
+
+- Rust core and desktop CLI first (Linux, macOS, Windows); mobile companion apps come after MVP.
+- DHT discovery first; agent-mediated neighbor discovery next.
+- No Sybil protection in alpha: invite-only / small networks. Do not add tokens, staking, or PoW silently.
+- Anonymity scope: content confidentiality and pseudonymity only. Do not claim IP anonymity or traffic-analysis resistance.
+- Out of MVP: mobile apps, Tor/I2P/mixnet, offline messaging, groups, payments, GUI, key recovery.
+
+Any change to these requires an explicit decision in the design document.
+
+## Workflow
+
+1. Read the relevant design-document sections before changing architecture.
+2. Keep changes small and testable. Add or update tests with behavior changes.
+3. Run `python3 scripts/check-language.py`, then `. ./scripts/env.sh` and run `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all`.
+4. Update README and English docs when usage or behavior changes.
+5. Use Conventional Commits.
+6. Push to the default branch. CI appends a code-update entry to the design document.
+7. For architecture changes, update the design document manually in the same change set. CI only appends a log; it never rewrites design sections.
+
+## GitHub identity
+
+Sceadu is developed under the `imloriskong` GitHub account. The `valaxkong` account is reserved for other projects on the same machine.
+
+- Switch identities with `. ./scripts/github-account.sh` and `github_use imloriskong`.
+- Never commit credentials, SSH private keys, or tokens.
+- Before committing, confirm `git config user.email` is `imloriskong@gmail.com`.
+- The first local history was rebuilt so published commits are attributed only to `imloriskong`.
+
+## Design document sync
+
+- Workflow: `.github/workflows/design-doc.yml`
+- Script: `scripts/update-design-doc.py`
+- Required CI secrets: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_DOC_TOKEN`.
+- The Feishu app needs `docx:document` and `docx:document:write_only` scopes and must be an editor on the document.
+- See `docs/design-doc-sync.md` for setup and failure behavior.
+
+## Code rules
+
+- Rust stable, 2021 edition or newer.
+- No custom cryptography. Use audited crates.
+- No plaintext fallback. Fail closed on signature, version, or crypto errors.
+- Keep `sceadu-core` independent of libp2p.
+- Wire-format changes require a spec update and test vectors under `spec/`.
+- Never commit secrets, private keys, tokens, or `.design/` content.
+- Prefer small modules with explicit interfaces.
+
+## Security
+
+- Treat all network input as untrusted.
+- Never log private keys, session keys, or message plaintext.
+- Report vulnerabilities privately; do not open public exploit issues.
+
+## Repository layout
+
+- `crates/` - Rust workspace (M1+)
+- `spec/` - wire format and test vectors
+- `skills/sceadu/` - agent skill files
+- `scripts/` - maintenance and CI scripts
+- `docs/` - English documentation
+- `.design/` - ignored Chinese design working copies
+
+## Current milestone
+
+M1: two-node Noise session, signed manifest exchange, and echo RPC. Do not implement M2+ features until M1 is accepted.

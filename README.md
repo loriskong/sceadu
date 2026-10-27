@@ -34,7 +34,7 @@ The canonical design document is the Feishu document **Sceadu Design Document** 
 
 https://edoxkf0rcr.feishu.cn/docx/Q9v6dLkF7oLxbrxncowcrDJInte
 
-Every push to the default branch appends a code-update entry to that document. Architecture sections are maintained manually. See [docs/design-doc-sync.md](docs/design-doc-sync.md) for setup.
+Architecture sections are maintained manually. Until CI sync is enabled, run the manual sync script after pushing to append a code-update entry. See [docs/design-doc-sync.md](docs/design-doc-sync.md) for the command and the future CI setup.
 
 ## Requirements
 

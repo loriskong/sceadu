@@ -38,7 +38,7 @@ Any change to these requires an explicit decision in the design document.
 3. Run `python3 scripts/check-language.py`, then `. ./scripts/env.sh` and run `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all`.
 4. Update README and English docs when usage or behavior changes.
 5. Use Conventional Commits.
-6. Push to the default branch. CI appends a code-update entry to the design document.
+6. Push to the default branch. Run the manual design-document sync after the push until CI sync is enabled.
 7. For architecture changes, update the design document manually in the same change set. CI only appends a log; it never rewrites design sections.
 
 ## GitHub identity
@@ -52,10 +52,10 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Design document sync
 
-- Workflow: `.github/workflows/design-doc.yml`
+- Current mode: manual. After a push, run:
+  `SKIP_LARK_CONFIG=1 FEISHU_AS=user FEISHU_DOC_TOKEN=... python3 scripts/update-design-doc.py`
 - Script: `scripts/update-design-doc.py`
-- Required CI secrets: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_DOC_TOKEN`.
-- The Feishu app needs `docx:document` and `docx:document:write_only` scopes and must be an editor on the document.
+- The GitHub workflow is manual-dispatch only. Enabling the push trigger requires bot edit access and `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `FEISHU_DOC_TOKEN` secrets.
 - See `docs/design-doc-sync.md` for setup and failure behavior.
 
 ## Code rules

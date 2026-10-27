@@ -34,3 +34,6 @@ Thumbs.db
 # Python helper caches
 __pycache__/
 *.pyc
+
+# Local Feishu auth QR artifacts
+feishu-auth.png

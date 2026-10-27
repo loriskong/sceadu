@@ -94,6 +94,9 @@ def main() -> None:
         doc_token = doc_token.rstrip("/").rsplit("/", 1)[-1]
 
     cli = os.environ.get("LARK_CLI_BIN", "lark-cli")
+    as_identity = os.environ.get("FEISHU_AS", "user").strip() or "user"
+    if as_identity not in ("user", "bot"):
+        die("FEISHU_AS must be user or bot")
 
     if os.environ.get("SKIP_LARK_CONFIG") != "1":
         app_id = require("FEISHU_APP_ID")
@@ -143,7 +146,7 @@ def main() -> None:
             "--content",
             entry,
             "--as",
-            "bot",
+            as_identity,
             "--format",
             "json",
         ]

@@ -2,7 +2,17 @@
 
 The Feishu document **Sceadu Design Document** is the canonical source for architecture and product intent. This repository is the source of truth for code. Every push to the default branch must append a code-update entry to the design document so readers can see what changed without opening the repository.
 
-The sync is append-only: CI adds a short entry with the commit, author, date, and changed files. It never rewrites architecture sections. Design changes are made manually in the Feishu document in the same change set.
+The sync is append-only: it adds a short entry with the commit, author, date, and changed files. It never rewrites architecture sections. Design changes are made manually in the Feishu document in the same change set.
+
+## Current mode
+
+CI sync is **not enabled** yet. The Feishu bot can read the document but does not have edit permission, and no repository secrets are configured. Until that changes, sync manually after a push:
+
+```sh
+SKIP_LARK_CONFIG=1 FEISHU_AS=user FEISHU_DOC_TOKEN=... python3 scripts/update-design-doc.py
+```
+
+The command uses the current CLI user identity. Confirm that it is valid with `lark-cli auth status`. The GitHub workflow is manual-dispatch only; the push trigger is commented out until bot edit access and secrets are in place.
 
 ## Trigger
 
@@ -51,7 +61,7 @@ The app ID is the `cli_...` value used by the Feishu app. Feishu supports `appid
 
 ## GitHub secrets
 
-Add these repository secrets:
+These are required only when enabling the CI push trigger. Until then, use the manual command above.
 
 | Secret | Value |
 |---|---|

@@ -76,7 +76,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Repository layout
 
-- `crates/` - Rust workspace (M1+)
+- `crates/` - Rust workspace (`sceadu-core`, `sceadu-net`, `sceadu-cli`)
 - `spec/` - wire format and test vectors
 - `skills/sceadu/` - agent skill files
 - `scripts/` - maintenance and CI scripts
@@ -85,4 +85,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1: two-node Noise session, signed manifest exchange, and echo RPC. Do not implement M2+ features until M1 is accepted.
+M1 is implemented: two-node Noise session, signed manifest exchange, and echo RPC. The next milestone is M2 (DHT plus agent-mediated discovery); do not start M2 until the user accepts M1.

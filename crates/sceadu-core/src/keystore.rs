@@ -186,12 +186,11 @@ fn create_with_params(
     let encrypted = cipher.encrypt(
         XNonce::from_slice(&nonce),
         Payload {
-            msg: &seed,
+            msg: seed.expose().as_slice(),
             aad: &aad,
         },
     );
     key.zeroize();
-    seed.zeroize();
 
     let ciphertext = encrypted.map_err(|_| Error::KeystoreUnlockFailed)?;
     let file = KeystoreFile {

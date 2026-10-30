@@ -1,0 +1,14 @@
+[package]
+name = "sceadu-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "libp2p transport and session layer for Sceadu"
+
+[dependencies]
+futures.workspace = true
+libp2p.workspace = true
+sceadu-core = { path = "../sceadu-core" }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

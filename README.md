@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M1).** The Rust workspace, Ed25519 identity, signed manifest types, and encrypted keystore are in place. libp2p sessions and discovery are in progress.
+> **Status: pre-alpha (M1 complete).** The Rust CLI, encrypted keystore, libp2p Noise sessions, signed manifest exchange, and echo RPC are in place. Discovery is next.
 
 ## What it does
 
@@ -84,6 +84,25 @@ cargo run -p sceadu-cli -- manifest --capability task.echo > manifest.json
 
 # Verify a manifest JSON file.
 cargo run -p sceadu-cli -- verify manifest.json
+
+# Start a foreground node that answers manifest and echo requests.
+cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
+
+# In another terminal, dial the printed address and echo.
+cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
+```
+
+To try two nodes locally, create a second keystore and use it for the client:
+
+```sh
+# Terminal A
+cargo run -p sceadu-cli -- init
+cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
+
+# Terminal B
+cargo run -p sceadu-cli -- --path /tmp/sceadu-b.json init
+cargo run -p sceadu-cli -- --path /tmp/sceadu-b.json echo \
+  --addr <listen-address-from-terminal-A> --message hello
 ```
 
 The default keystore is `~/.sceadu/identity.json`. `--path` overrides it, and `SCEADU_HOME` changes the default directory. `init`, `id`, and `manifest` prompt for the passphrase; for tests or automation, pass `--passphrase-file <path>` (0600). The passphrase is never accepted as a command-line argument or environment variable.
@@ -95,7 +114,7 @@ cargo run -p sceadu-cli -- dev-id
 cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
 ```
 
-Still planned for M1c-M3:
+Still planned for M2-M3:
 
 ```sh
 sceadu daemon start
@@ -116,7 +135,7 @@ All planned commands support `--json` for agent consumption.
 ## Repository layout
 
 ```text
-crates/           Rust workspace (M1+)
+crates/           Rust workspace (core, net, cli)
 spec/             wire format and test vectors
 skills/sceadu/    agent skill files
 scripts/          maintenance and CI scripts

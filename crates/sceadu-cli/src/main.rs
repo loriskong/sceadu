@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sceadu_core::keystore;
 use sceadu_core::{Capability, Identity, Manifest, ManifestBody};
+use sceadu_net::{spawn as spawn_node, Multiaddr};
 use serde::Serialize;
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -43,6 +44,21 @@ enum Command {
         #[arg(long, default_value_t = 3600)]
         ttl: u64,
     },
+    /// Start a node and answer manifest and echo requests until Ctrl-C.
+    Serve {
+        /// Listen multiaddr.
+        #[arg(long, default_value = "/ip4/127.0.0.1/tcp/0")]
+        listen: Multiaddr,
+    },
+    /// Dial a node, exchange manifests, and send an echo request.
+    Echo {
+        /// Peer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        addr: Multiaddr,
+        /// Message to echo.
+        #[arg(long, default_value = "hello")]
+        message: String,
+    },
     /// Generate an ephemeral development identity and print it.
     DevId,
     /// Sign a development manifest with an ephemeral identity.
@@ -64,7 +80,8 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -109,6 +126,39 @@ fn main() -> Result<()> {
 
             print_json(&manifest)?;
         }
+        Command::Serve { listen } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, address) = spawn_node(&identity, Some(listen)).await?;
+            let address = address.ok_or_else(|| anyhow!("no listen address"))?;
+
+            print_json(&json!({
+                "agent_id": node.agent_id().to_string(),
+                "peer_id": node.peer_id().to_string(),
+                "listen": address.to_string(),
+                "capabilities": ["task.echo"],
+                "note": "press Ctrl-C to stop"
+            }))?;
+
+            tokio::signal::ctrl_c()
+                .await
+                .context("failed to wait for Ctrl-C")?;
+            node.shutdown().await;
+        }
+        Command::Echo { addr, message } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, _) = spawn_node(&identity, None).await?;
+            let peer = node.dial(addr).await?;
+            let manifest = node.request_manifest(peer).await?;
+            let reply = node.echo(peer, message).await?;
+
+            print_json(&json!({
+                "peer": peer.to_string(),
+                "agent_id": manifest.body.agent_id.to_string(),
+                "echo": reply
+            }))?;
+
+            node.shutdown().await;
+        }
         Command::DevId => {
             let identity = Identity::generate();
             let agent_id = identity.agent_id();
@@ -142,6 +192,12 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn load_identity(path: &Option<PathBuf>, passphrase_file: &Option<PathBuf>) -> Result<Identity> {
+    let path = keystore_path(path.clone())?;
+    let passphrase = read_passphrase(passphrase_file.as_deref(), false)?;
+    Ok(keystore::unlock(&path, passphrase.as_str())?)
 }
 
 fn keystore_path(path: Option<PathBuf>) -> Result<PathBuf> {

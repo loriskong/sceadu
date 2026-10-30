@@ -4,7 +4,7 @@ mod identity;
 pub mod keystore;
 mod manifest;
 
-pub use identity::{AgentId, Identity};
+pub use identity::{AgentId, Identity, SecretSeed};
 pub use manifest::{Capability, Manifest, ManifestBody, MANIFEST_VERSION};
 
 /// Errors returned by the core types.

@@ -4,6 +4,7 @@ use std::str::FromStr;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use zeroize::Zeroize;
 
 use crate::Error;
 
@@ -84,6 +85,28 @@ impl<'de> Deserialize<'de> for AgentId {
     }
 }
 
+/// Secret seed material. Zeroizes on drop and never implements `Debug` output.
+pub struct SecretSeed([u8; 32]);
+
+impl SecretSeed {
+    /// Expose the raw seed. Callers must not copy it into long-lived storage.
+    pub fn expose(&mut self) -> &mut [u8; 32] {
+        &mut self.0
+    }
+}
+
+impl Drop for SecretSeed {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl fmt::Debug for SecretSeed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretSeed([REDACTED])")
+    }
+}
+
 /// An Ed25519 signing identity.
 ///
 /// This type is intentionally not serializable. Persisting a signing key is a
@@ -110,11 +133,11 @@ impl Identity {
         }
     }
 
-    /// Export the 32-byte seed for encrypted storage.
+    /// Export the 32-byte seed for encrypted storage or transport key setup.
     ///
-    /// The returned array is secret material. Callers must zeroize it.
-    pub(crate) fn to_seed(&self) -> [u8; 32] {
-        self.signing_key.to_bytes()
+    /// The returned value zeroizes on drop and must not be serialized.
+    pub fn to_seed(&self) -> SecretSeed {
+        SecretSeed(self.signing_key.to_bytes())
     }
 
     pub fn agent_id(&self) -> AgentId {

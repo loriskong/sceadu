@@ -9,12 +9,17 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
+argon2 = "0.5"
 base64 = "0.22"
 bs58 = "0.5"
 ciborium = "0.2"
+chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rpassword = "7"
+tempfile = "3"
 thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }

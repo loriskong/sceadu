@@ -100,10 +100,21 @@ impl Identity {
         }
     }
 
-    pub fn from_seed(seed: [u8; 32]) -> Self {
+    /// Reconstruct from a 32-byte seed.
+    ///
+    /// Keystore and test code only. Production callers must obtain the seed
+    /// from a CSPRNG, never from a user passphrase or other low-entropy input.
+    pub(crate) fn from_seed(seed: [u8; 32]) -> Self {
         Self {
             signing_key: SigningKey::from_bytes(&seed),
         }
+    }
+
+    /// Export the 32-byte seed for encrypted storage.
+    ///
+    /// The returned array is secret material. Callers must zeroize it.
+    pub(crate) fn to_seed(&self) -> [u8; 32] {
+        self.signing_key.to_bytes()
     }
 
     pub fn agent_id(&self) -> AgentId {

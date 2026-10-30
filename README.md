@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M1).** The Rust workspace, Ed25519 identity, and signed manifest types are in place. Persistent keystore, libp2p sessions, and discovery are in progress.
+> **Status: pre-alpha (M1).** The Rust workspace, Ed25519 identity, signed manifest types, and encrypted keystore are in place. libp2p sessions and discovery are in progress.
 
 ## What it does
 
@@ -70,23 +70,34 @@ No installer exists yet. Do not expect the commands above to work at M0.
 
 ## Usage
 
-Current commands in the M1 scaffold:
+Current commands:
 
 ```sh
-# Generate an ephemeral development identity and print its AgentID.
-cargo run -p sceadu-cli -- dev-id
+# Create an encrypted keystore. Prompts for a passphrase.
+cargo run -p sceadu-cli -- init
 
-# Sign a development manifest with an ephemeral identity.
-cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
+# Print the persisted AgentID.
+cargo run -p sceadu-cli -- id
+
+# Sign a manifest with the persisted identity.
+cargo run -p sceadu-cli -- manifest --capability task.echo > manifest.json
 
 # Verify a manifest JSON file.
 cargo run -p sceadu-cli -- verify manifest.json
 ```
 
-The `dev-*` commands are deliberately ephemeral. The persistent keystore, `sceadu init`, `sceadu daemon`, discovery, and task commands are planned for the rest of M1-M3:
+The default keystore is `~/.sceadu/identity.json`. `--path` overrides it, and `SCEADU_HOME` changes the default directory. `init`, `id`, and `manifest` prompt for the passphrase; for tests or automation, pass `--passphrase-file <path>` (0600). The passphrase is never accepted as a command-line argument or environment variable.
+
+The `dev-*` commands are ephemeral development helpers:
 
 ```sh
-sceadu init
+cargo run -p sceadu-cli -- dev-id
+cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
+```
+
+Still planned for M1c-M3:
+
+```sh
 sceadu daemon start
 sceadu status --json
 sceadu discover --capability task.echo --json
@@ -122,6 +133,8 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 ## Security
 
 Sceadu handles identity keys and untrusted network input. Do not log private keys, session keys, or message plaintext. Report vulnerabilities privately; do not open a public issue with exploit details.
+
+The Ed25519 seed is stored in an Argon2id + XChaCha20-Poly1305 keystore. There is no recovery: losing the keystore or passphrase loses the AgentID. Back up the keystore and passphrase.
 
 ## License
 

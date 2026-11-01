@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M1 complete).** The Rust CLI, encrypted keystore, libp2p Noise sessions, signed manifest exchange, and echo RPC are in place. Discovery is next.
+> **Status: pre-alpha (M2 core).** M1 is complete. DHT manifest lookup and agent-mediated neighbor discovery are implemented; capability provider records, bootstrap/invite flows, and M2 hardening are next.
 
 ## What it does
 
@@ -88,8 +88,14 @@ cargo run -p sceadu-cli -- verify manifest.json
 # Start a foreground node that answers manifest and echo requests.
 cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
 
+# Start with a stealth neighbor policy instead.
+cargo run -p sceadu-cli -- serve --neighbor-policy stealth
+
 # In another terminal, dial the printed address and echo.
 cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
+
+# Ask an introducer for its verified neighbors.
+cargo run -p sceadu-cli -- discover --addr <introducer-address> --capability task.echo
 ```
 
 To try two nodes locally, create a second keystore and use it for the client:
@@ -119,12 +125,20 @@ Still planned for M2-M3:
 ```sh
 sceadu daemon start
 sceadu status --json
-sceadu discover --capability task.echo --json
 sceadu ask --capability task.echo --input '{"text":"hello"}' --json
 sceadu skill install
 ```
 
 All planned commands support `--json` for agent consumption.
+
+## Discovery
+
+M2 implements two complementary discovery paths:
+
+- **Structured DHT:** a node publishes its signed manifest under a hashed AgentID key and can fetch and verify another node's manifest by AgentID.
+- **Agent-mediated:** a node can ask a connected peer for verified neighbor manifests. The client rejects forged signatures, expired manifests, duplicates, and capability mismatches; responders choose `open` or `stealth` policy.
+
+`serve --neighbor-policy` controls the responder. `discover` exercises the agent-mediated path from the CLI. Capability provider records, bootstrap/invite flows, and anti-eclipse hardening remain M2 work.
 
 ## Update
 

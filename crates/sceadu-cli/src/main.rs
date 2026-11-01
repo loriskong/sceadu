@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sceadu_core::keystore;
 use sceadu_core::{Capability, Identity, Manifest, ManifestBody};
-use sceadu_net::{spawn as spawn_node, Multiaddr};
+use sceadu_net::{spawn as spawn_node, spawn_with_config, Multiaddr, NeighborPolicy, NodeConfig};
 use serde::Serialize;
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -49,6 +49,9 @@ enum Command {
         /// Listen multiaddr.
         #[arg(long, default_value = "/ip4/127.0.0.1/tcp/0")]
         listen: Multiaddr,
+        /// Neighbor query policy: open or stealth.
+        #[arg(long, default_value = "open")]
+        neighbor_policy: String,
     },
     /// Dial a node, exchange manifests, and send an echo request.
     Echo {
@@ -58,6 +61,18 @@ enum Command {
         /// Message to echo.
         #[arg(long, default_value = "hello")]
         message: String,
+    },
+    /// Ask a connected peer for its verified neighbors.
+    Discover {
+        /// Introducer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        addr: Multiaddr,
+        /// Filter by capability.
+        #[arg(long)]
+        capability: Option<String>,
+        /// Maximum number of records to request.
+        #[arg(long, default_value_t = 8)]
+        max: u32,
     },
     /// Generate an ephemeral development identity and print it.
     DevId,
@@ -126,9 +141,20 @@ async fn main() -> Result<()> {
 
             print_json(&manifest)?;
         }
-        Command::Serve { listen } => {
+        Command::Serve {
+            listen,
+            neighbor_policy,
+        } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
-            let (node, address) = spawn_node(&identity, Some(listen)).await?;
+            let policy = parse_neighbor_policy(&neighbor_policy)?;
+            let (node, address) = spawn_with_config(
+                &identity,
+                Some(listen),
+                NodeConfig {
+                    neighbor_policy: policy,
+                },
+            )
+            .await?;
             let address = address.ok_or_else(|| anyhow!("no listen address"))?;
 
             print_json(&json!({
@@ -136,6 +162,7 @@ async fn main() -> Result<()> {
                 "peer_id": node.peer_id().to_string(),
                 "listen": address.to_string(),
                 "capabilities": ["task.echo"],
+                "neighbor_policy": policy.as_str(),
                 "note": "press Ctrl-C to stop"
             }))?;
 
@@ -155,6 +182,36 @@ async fn main() -> Result<()> {
                 "peer": peer.to_string(),
                 "agent_id": manifest.body.agent_id.to_string(),
                 "echo": reply
+            }))?;
+
+            node.shutdown().await;
+        }
+        Command::Discover {
+            addr,
+            capability,
+            max,
+        } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, _) = spawn_node(&identity, None).await?;
+            let peer = node.dial(addr).await?;
+            let _ = node.request_manifest(peer).await?;
+            let records = node.neighbors(peer, capability.clone(), max).await?;
+
+            let neighbors: Vec<_> = records
+                .iter()
+                .map(|record| {
+                    json!({
+                        "agent_id": record.manifest.body.agent_id.to_string(),
+                        "endpoints": record.manifest.body.endpoints,
+                        "observed_at": record.observed_at
+                    })
+                })
+                .collect();
+
+            print_json(&json!({
+                "introducer": peer.to_string(),
+                "capability": capability,
+                "neighbors": neighbors
             }))?;
 
             node.shutdown().await;
@@ -192,6 +249,14 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_neighbor_policy(value: &str) -> Result<NeighborPolicy> {
+    match value {
+        "open" => Ok(NeighborPolicy::Open),
+        "stealth" => Ok(NeighborPolicy::Stealth),
+        _ => bail!("neighbor policy must be 'open' or 'stealth'"),
+    }
 }
 
 fn load_identity(path: &Option<PathBuf>, passphrase_file: &Option<PathBuf>) -> Result<Identity> {

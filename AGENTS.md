@@ -85,4 +85,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1 is implemented: two-node Noise session, signed manifest exchange, and echo RPC. The next milestone is M2 (DHT plus agent-mediated discovery); do not start M2 until the user accepts M1.
+M1 is complete. M2 core is implemented: DHT manifest publish/lookup by AgentID and agent-mediated neighbor discovery with `open`/`stealth` policies and client-side validation. Remaining M2 work: capability provider records, bootstrap/invite flow, and anti-eclipse hardening. Do not start M3 until M2 is accepted.

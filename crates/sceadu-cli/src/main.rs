@@ -52,6 +52,9 @@ enum Command {
         /// Neighbor query policy: open or stealth.
         #[arg(long, default_value = "open")]
         neighbor_policy: String,
+        /// Known peer to dial and exchange manifests with at startup.
+        #[arg(long = "peer")]
+        peers: Vec<Multiaddr>,
     },
     /// Dial a node, exchange manifests, and send an echo request.
     Echo {
@@ -144,6 +147,7 @@ async fn main() -> Result<()> {
         Command::Serve {
             listen,
             neighbor_policy,
+            peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             let policy = parse_neighbor_policy(&neighbor_policy)?;
@@ -157,12 +161,29 @@ async fn main() -> Result<()> {
             .await?;
             let address = address.ok_or_else(|| anyhow!("no listen address"))?;
 
+            let mut bootstrapped = Vec::new();
+            for peer_addr in peers {
+                let peer = node
+                    .dial(peer_addr.clone())
+                    .await
+                    .with_context(|| format!("failed to dial {}", peer_addr))?;
+                let manifest = node
+                    .request_manifest(peer)
+                    .await
+                    .with_context(|| format!("manifest exchange with {}", peer_addr))?;
+                bootstrapped.push(json!({
+                    "peer": peer.to_string(),
+                    "agent_id": manifest.body.agent_id.to_string()
+                }));
+            }
+
             print_json(&json!({
                 "agent_id": node.agent_id().to_string(),
                 "peer_id": node.peer_id().to_string(),
                 "listen": address.to_string(),
                 "capabilities": ["task.echo"],
                 "neighbor_policy": policy.as_str(),
+                "peers": bootstrapped,
                 "note": "press Ctrl-C to stop"
             }))?;
 

@@ -9,7 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
-use libp2p::kad::{self, GetRecordOk, QueryId, QueryResult, Quorum, Record, RecordKey};
+use libp2p::kad::{
+    self, GetProvidersOk, GetRecordOk, QueryId, QueryResult, Quorum, Record, RecordKey,
+};
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::{
     self, Message, OutboundRequestId, ProtocolSupport, ResponseChannel,
@@ -152,6 +154,13 @@ enum DhtPending {
     Bootstrap {
         reply: oneshot::Sender<Result<()>>,
     },
+    Provide {
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Providers {
+        collected: HashSet<PeerId>,
+        reply: oneshot::Sender<Result<Vec<PeerId>>>,
+    },
 }
 
 enum Command {
@@ -189,6 +198,18 @@ enum Command {
     },
     Bootstrap {
         reply: oneshot::Sender<Result<()>>,
+    },
+    Provide {
+        capability: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Providers {
+        capability: String,
+        reply: oneshot::Sender<Result<Vec<PeerId>>>,
+    },
+    DialPeer {
+        peer: PeerId,
+        reply: oneshot::Sender<Result<PeerId>>,
     },
     Shutdown,
 }
@@ -268,6 +289,44 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
+    /// Query multiple introducers and merge their validated contacts.
+    ///
+    /// A failed introducer is skipped rather than failing the whole discovery
+    /// result. Records are de-duplicated by AgentID and capped globally.
+    pub async fn discover(
+        &self,
+        introducers: &[PeerId],
+        capability: Option<String>,
+        per_introducer: u32,
+        max_total: u32,
+    ) -> Result<Vec<ContactRecord>> {
+        let limit = max_total.clamp(1, 128) as usize;
+        let mut seen = HashSet::new();
+        let mut records = Vec::new();
+
+        for introducer in introducers {
+            if records.len() >= limit {
+                break;
+            }
+            let Ok(batch) = self
+                .neighbors(*introducer, capability.clone(), per_introducer)
+                .await
+            else {
+                continue;
+            };
+            for record in batch {
+                if records.len() >= limit {
+                    break;
+                }
+                if seen.insert(record.manifest.body.agent_id.to_string()) {
+                    records.push(record);
+                }
+            }
+        }
+
+        Ok(records)
+    }
+
     pub async fn publish(&self) -> Result<()> {
         let (reply, receiver) = oneshot::channel();
         self.commands
@@ -299,6 +358,39 @@ impl NodeHandle {
         let (reply, receiver) = oneshot::channel();
         self.commands
             .send(Command::Bootstrap { reply })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)?
+    }
+
+    pub async fn provide(&self, capability: impl Into<String>) -> Result<()> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::Provide {
+                capability: capability.into(),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)?
+    }
+
+    pub async fn providers(&self, capability: impl Into<String>) -> Result<Vec<PeerId>> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::Providers {
+                capability: capability.into(),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)?
+    }
+
+    pub async fn dial_peer(&self, peer: PeerId) -> Result<PeerId> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::DialPeer { peer, reply })
             .await
             .map_err(|_| Error::Closed)?;
         receiver.await.map_err(|_| Error::Closed)?
@@ -736,6 +828,52 @@ fn handle_command(
                 .insert(query, DhtPending::Bootstrap { reply });
             true
         }
+        Command::Provide { capability, reply } => {
+            let query = match swarm
+                .behaviour_mut()
+                .kad
+                .start_providing(capability_key(&capability))
+            {
+                Ok(query) => query,
+                Err(error) => {
+                    let _ = reply.send(Err(Error::Dht(error.to_string())));
+                    return true;
+                }
+            };
+            state
+                .pending_dht
+                .insert(query, DhtPending::Provide { reply });
+            true
+        }
+        Command::Providers { capability, reply } => {
+            let query = swarm
+                .behaviour_mut()
+                .kad
+                .get_providers(capability_key(&capability));
+            state.pending_dht.insert(
+                query,
+                DhtPending::Providers {
+                    collected: HashSet::new(),
+                    reply,
+                },
+            );
+            true
+        }
+        Command::DialPeer { peer, reply } => {
+            if swarm.is_connected(&peer) {
+                let _ = reply.send(Ok(peer));
+                return true;
+            }
+            match swarm.dial(peer) {
+                Ok(()) => {
+                    state.pending_dials.insert(peer, reply);
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(Error::Dial(error.to_string())));
+                }
+            }
+            true
+        }
         Command::Shutdown => false,
     }
 }
@@ -753,6 +891,14 @@ fn handle_kad_event(event: kad::Event, state: &mut NodeState) {
     }) = state.pending_dht.get_mut(&id)
     {
         update_found(found, agent_id, &result);
+    }
+
+    if let Some(DhtPending::Providers { collected, .. }) = state.pending_dht.get_mut(&id) {
+        if let QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders { providers, .. })) =
+            &result
+        {
+            collected.extend(providers.iter().cloned());
+        }
     }
 
     if !step.last {
@@ -787,6 +933,19 @@ fn handle_kad_event(event: kad::Event, state: &mut NodeState) {
             };
             let _ = reply.send(outcome);
         }
+        DhtPending::Provide { reply } => {
+            let outcome = match result {
+                QueryResult::StartProviding(Ok(_)) => Ok(()),
+                QueryResult::StartProviding(Err(error)) => Err(Error::Dht(error.to_string())),
+                other => Err(Error::Dht(format!("unexpected DHT result: {other:?}"))),
+            };
+            let _ = reply.send(outcome);
+        }
+        DhtPending::Providers { collected, reply } => {
+            let mut peers: Vec<PeerId> = collected.into_iter().collect();
+            peers.sort_by_key(|peer| peer.to_string());
+            let _ = reply.send(Ok(peers));
+        }
     }
 }
 
@@ -807,6 +966,12 @@ fn update_found(found: &mut Option<Box<Manifest>>, agent_id: &AgentId, result: &
 
 fn manifest_key(agent_id: &AgentId) -> RecordKey {
     let digest = Sha256::digest(format!("aan/id/{agent_id}").as_bytes());
+    RecordKey::new(&digest)
+}
+
+fn capability_key(capability: &str) -> RecordKey {
+    let normalized = capability.trim().to_ascii_lowercase();
+    let digest = Sha256::digest(format!("aan/cap/{normalized}").as_bytes());
     RecordKey::new(&digest)
 }
 

@@ -85,4 +85,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1 is complete. M2 core is implemented: DHT manifest publish/lookup by AgentID and agent-mediated neighbor discovery with `open`/`stealth` policies and client-side validation. Remaining M2 work: capability provider records, bootstrap/invite flow, and anti-eclipse hardening. Do not start M3 until M2 is accepted.
+M1 is complete. M2 core is implemented: DHT manifest publish/lookup, capability provider records, agent-mediated multi-source discovery, `open`/`stealth` policies, client-side validation, and `serve --peer` bootstrapping. Remaining M2 work: invite tickets, local source reputation/quarantine, and DHT CLI operations. Do not start M3 until M2 is accepted.

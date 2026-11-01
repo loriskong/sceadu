@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M2 core).** M1 is complete. DHT manifest lookup and agent-mediated neighbor discovery are implemented; capability provider records, bootstrap/invite flows, and M2 hardening are next.
+> **Status: pre-alpha (M2 core).** M1 is complete. DHT manifest and capability provider records, agent-mediated multi-source discovery, open/stealth policies, and `serve --peer` bootstrapping are implemented. Invite tickets, local source reputation, and DHT CLI operations remain.
 
 ## What it does
 
@@ -91,6 +91,9 @@ cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
 # Start with a stealth neighbor policy instead.
 cargo run -p sceadu-cli -- serve --neighbor-policy stealth
 
+# Start a node and seed it with a known peer.
+cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0 --peer <known-peer-address>
+
 # In another terminal, dial the printed address and echo.
 cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
 
@@ -135,10 +138,11 @@ All planned commands support `--json` for agent consumption.
 
 M2 implements two complementary discovery paths:
 
-- **Structured DHT:** a node publishes its signed manifest under a hashed AgentID key and can fetch and verify another node's manifest by AgentID.
-- **Agent-mediated:** a node can ask a connected peer for verified neighbor manifests. The client rejects forged signatures, expired manifests, duplicates, and capability mismatches; responders choose `open` or `stealth` policy.
+- **Structured DHT:** a node publishes its signed manifest under a hashed AgentID key, advertises capabilities as provider records, and can fetch and verify another node's manifest by AgentID.
+- **Agent-mediated:** a node can ask connected peers for verified neighbor manifests. The client rejects forged signatures, expired manifests, duplicates, and capability mismatches; responders choose `open` or `stealth` policy.
+- **Multi-source merge:** the library `discover` API queries multiple introducers, de-duplicates by AgentID, and skips failed introducers rather than failing the whole result.
 
-`serve --neighbor-policy` controls the responder. `discover` exercises the agent-mediated path from the CLI. Capability provider records, bootstrap/invite flows, and anti-eclipse hardening remain M2 work.
+`serve --neighbor-policy` controls the responder, and `serve --peer` seeds a node with known peers. `discover` exercises the agent-mediated path from the CLI. Invite tickets, local source reputation/quarantine, and DHT CLI operations remain M2 work.
 
 ## Update
 

@@ -43,6 +43,15 @@ async fn neighbor_query_discovers_a_third_node() {
     let echo = a.echo(c_peer, "hello").await.unwrap();
     assert_eq!(echo, "hello");
 
+    let merged = a
+        .discover(&[b_peer, c_peer], Some("task.echo".to_owned()), 8, 8)
+        .await
+        .unwrap();
+    assert!(merged.len() >= 2);
+    assert!(merged
+        .iter()
+        .any(|record| record.manifest.body.agent_id == c_identity.agent_id()));
+
     a.shutdown().await;
     b.shutdown().await;
     c.shutdown().await;

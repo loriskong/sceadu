@@ -112,3 +112,40 @@ fn init_refuses_to_overwrite() {
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already exists"));
 }
+
+#[test]
+fn skill_install_writes_and_protects_skill() {
+    let directory = TempDir::new().unwrap();
+    let skill_dir = directory.path().join("sceadu-skill");
+    let path = skill_dir.join("SKILL.md");
+
+    let mut install = Command::cargo_bin("sceadu").unwrap();
+    let first = install
+        .args(["skill", "install", "--dir", skill_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let content = fs::read_to_string(&path).unwrap();
+    assert!(content.contains("name: sceadu"));
+
+    let mut install_again = Command::cargo_bin("sceadu").unwrap();
+    let second = install_again
+        .args(["skill", "install", "--dir", skill_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("already exists"));
+
+    let mut force = Command::cargo_bin("sceadu").unwrap();
+    let third = force
+        .args([
+            "skill",
+            "install",
+            "--dir",
+            skill_dir.to_str().unwrap(),
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(third.status.success());
+}

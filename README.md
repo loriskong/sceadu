@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M2 complete).** M1 is complete. M2 adds DHT manifest and capability provider records, agent-mediated multi-source discovery, open/stealth policies, `serve --peer` bootstrapping, signed invite tickets, local source quarantine, and DHT CLI operations.
+> **Status: pre-alpha (M3 complete, MCP deferred).** M1 and M2 are complete. M3 adds a streaming task protocol, CLI `ask`, and `skill install`. The MCP bridge is intentionally deferred; the CLI JSON interface is the agent interface for now.
 
 ## What it does
 
@@ -111,6 +111,13 @@ cargo run -p sceadu-cli -- publish --peer <dht-peer-address>
 
 # Look up an agent's manifest through a DHT peer.
 cargo run -p sceadu-cli -- lookup --peer <dht-peer-address> <agent-id>
+
+# Invoke a remote capability; prints one JSON event per line.
+cargo run -p sceadu-cli -- ask --addr <peer-address> --capability task.echo --input '{"text":"hi"}'
+
+# Install the agent skill.
+cargo run -p sceadu-cli -- skill install
+cargo run -p sceadu-cli -- skill path
 ```
 
 To try two nodes locally, create a second keystore and use it for the client:
@@ -135,13 +142,11 @@ cargo run -p sceadu-cli -- dev-id
 cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
 ```
 
-Still planned for M3:
+Still planned for M4:
 
 ```sh
 sceadu daemon start
 sceadu status --json
-sceadu ask --capability task.echo --input '{"text":"hello"}' --json
-sceadu skill install
 ```
 
 All planned commands support `--json` for agent consumption.
@@ -155,6 +160,22 @@ M2 implements two complementary discovery paths:
 - **Multi-source merge:** the library `discover` API queries multiple introducers, de-duplicates by AgentID, and skips failed introducers rather than failing the whole result.
 
 `serve --neighbor-policy` controls the responder, and `serve --peer` seeds a node with known peers. `discover` exercises the agent-mediated path from the CLI. Signed invites (`invite`/`join`), source quarantine, and DHT `publish`/`lookup` are implemented. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+
+## Tasks
+
+M3 adds a streaming task protocol on the existing Noise session:
+
+1. The client verifies the server manifest and sends `TaskStart`.
+2. The server validates the capability, deadline, input size, and stores the pending task.
+3. After `TaskAccepted`, the client registers the task and sends `TaskReady`.
+4. The server pushes `TaskEventPush` messages: `started`, `progress`, `result`, `failed`, and `done`.
+5. The client acknowledges each event and prints JSON Lines.
+
+`sceadu serve` handles `task.echo` by default. `sceadu ask` is the CLI client. The MCP bridge is deferred by an explicit project decision; agents use the CLI JSON interface instead.
+
+## Skill
+
+`sceadu skill install` writes `SKILL.md` to `~/.agents/skills/sceadu/`, teaching a local agent how to discover peers and invoke tasks. `--dir` overrides the destination for tests or custom agent runtimes. The skill source lives in [skills/sceadu/SKILL.md](skills/sceadu/SKILL.md).
 
 ## Update
 

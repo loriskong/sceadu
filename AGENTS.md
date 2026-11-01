@@ -6,7 +6,7 @@ This file is loaded by DSH-compatible agents as project context. Keep it accurat
 
 Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, discover each other through a structured DHT plus agent-mediated neighbor discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
 
-Current stage: pre-alpha (M2 complete). The MVP is defined in section 4.3 of the design document.
+Current stage: pre-alpha (M3 complete, MCP bridge deferred). The MVP is defined in section 4.3 of the design document.
 
 ## Sources of truth
 
@@ -85,4 +85,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1 and M2 are complete. M2 includes DHT manifest publish/lookup, capability provider records, agent-mediated multi-source discovery, `open`/`stealth` policies, client-side validation, `serve --peer` bootstrapping, signed invite tickets, local source quarantine, and DHT CLI operations. The next milestone is M3 (task protocol, streaming events, MCP bridge, skill install); do not start M3 until the user accepts M2. Remaining M2 hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+M1, M2, and the M3 scope requested by the user are complete: streaming task protocol, CLI `ask`, and `skill install`. The MCP bridge is intentionally deferred by an explicit user decision; do not add it without a new decision. The next milestone is M4; do not start M4 until the user accepts M3. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.

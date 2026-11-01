@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
@@ -19,8 +21,10 @@ use libp2p::request_response::{
 use libp2p::swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 pub use libp2p::{Multiaddr, PeerId};
+use rand_core::{OsRng, RngCore};
 use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -32,6 +36,8 @@ const PROTOCOL: &str = "/sceadu/rpc/1.0.0";
 const MANIFEST_TTL_SECONDS: u64 = 3600;
 const QUARANTINE_FAILURES: u32 = 3;
 const QUARANTINE_DURATION: Duration = Duration::from_secs(60);
+const MAX_TASK_INPUT_BYTES: usize = 64 * 1024;
+const MAX_TASK_ID_LEN: usize = 128;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -82,6 +88,20 @@ enum RpcRequest {
         max: u32,
         nonce: u64,
     },
+    TaskStart {
+        task_id: String,
+        capability: String,
+        input: Value,
+        deadline_at: u64,
+    },
+    TaskReady {
+        task_id: String,
+    },
+    TaskEventPush {
+        task_id: String,
+        sequence: u64,
+        event: TaskEventKind,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +114,16 @@ enum RpcResponse {
         records: Vec<ContactRecord>,
         nonce: u64,
         policy: String,
+    },
+    TaskAccepted {
+        task_id: String,
+    },
+    TaskReadyAck {
+        task_id: String,
+    },
+    TaskEventAck {
+        task_id: String,
+        sequence: u64,
     },
     Error {
         message: String,
@@ -132,6 +162,46 @@ pub struct NodeConfig {
     pub neighbor_policy: NeighborPolicy,
 }
 
+/// One event in a remote task stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskEventKind {
+    Started {
+        capability: String,
+    },
+    Progress {
+        message: String,
+        fraction: Option<f64>,
+    },
+    Result {
+        output: Value,
+    },
+    Failed {
+        message: String,
+    },
+    Done,
+}
+
+/// A sequenced task event sent by a remote agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskEvent {
+    pub task_id: String,
+    pub sequence: u64,
+    pub event: TaskEventKind,
+}
+
+/// A handle to an in-flight task. Events arrive in sequence order.
+pub struct TaskHandle {
+    pub task_id: String,
+    events: mpsc::Receiver<TaskEvent>,
+}
+
+impl TaskHandle {
+    pub async fn next(&mut self) -> Option<TaskEvent> {
+        self.events.recv().await
+    }
+}
+
 type PendingNeighbors = (
     u64,
     u32,
@@ -145,9 +215,31 @@ struct SourceStats {
     quarantined_until: Option<Instant>,
 }
 
+struct ActiveTask {
+    events: mpsc::Sender<TaskEvent>,
+    last_sequence: u64,
+}
+
+struct PendingAsk {
+    task_id: String,
+    events: mpsc::Sender<TaskEvent>,
+    receiver: Option<mpsc::Receiver<TaskEvent>>,
+    reply: oneshot::Sender<Result<TaskHandle>>,
+}
+
+struct IncomingTask {
+    peer: PeerId,
+    capability: String,
+    input: Value,
+    deadline_at: u64,
+}
+
 #[derive(Default)]
 struct NodeState {
     sources: HashMap<PeerId, SourceStats>,
+    pending_asks: HashMap<OutboundRequestId, PendingAsk>,
+    active_tasks: HashMap<String, ActiveTask>,
+    incoming_tasks: HashMap<String, IncomingTask>,
     manifests: HashMap<PeerId, Manifest>,
     pending_dials: HashMap<PeerId, oneshot::Sender<Result<PeerId>>>,
     pending_manifests: HashMap<OutboundRequestId, oneshot::Sender<Result<Manifest>>>,
@@ -224,6 +316,13 @@ enum Command {
     DialPeer {
         peer: PeerId,
         reply: oneshot::Sender<Result<PeerId>>,
+    },
+    Ask {
+        peer: PeerId,
+        capability: String,
+        input: Value,
+        deadline_at: u64,
+        reply: oneshot::Sender<Result<TaskHandle>>,
     },
     Shutdown,
 }
@@ -410,6 +509,29 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
+    /// Start a task and return a handle that yields streaming events.
+    pub async fn ask(
+        &self,
+        peer: PeerId,
+        capability: impl Into<String>,
+        input: Value,
+        timeout: Duration,
+    ) -> Result<TaskHandle> {
+        let deadline_at = now_unix().saturating_add(timeout.as_secs().max(1));
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::Ask {
+                peer,
+                capability: capability.into(),
+                input,
+                deadline_at,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)?
+    }
+
     pub async fn shutdown(self) {
         let _ = self.commands.send(Command::Shutdown).await;
         let _ = self.task.await;
@@ -587,7 +709,7 @@ fn handle_rpc_event(
             Message::Response {
                 request_id,
                 response,
-            } => handle_response(peer, request_id, response, state),
+            } => handle_response(swarm, peer, request_id, response, state),
         },
         request_response::Event::OutboundFailure {
             peer,
@@ -609,6 +731,188 @@ fn handle_rpc_event(
         }
         _ => {}
     }
+}
+
+fn task_error(message: impl Into<String>) -> RpcResponse {
+    RpcResponse::Error {
+        message: message.into(),
+    }
+}
+
+fn handle_task_start(
+    peer: PeerId,
+    task_id: String,
+    capability: String,
+    input: Value,
+    deadline_at: u64,
+    local_manifest: &Manifest,
+    state: &mut NodeState,
+) -> RpcResponse {
+    if !state.manifests.contains_key(&peer) {
+        return task_error("manifest exchange required");
+    }
+    if task_id.is_empty() || task_id.len() > MAX_TASK_ID_LEN {
+        return task_error("invalid task id");
+    }
+    if state.incoming_tasks.contains_key(&task_id) {
+        return task_error("task id already active");
+    }
+    if deadline_at <= now_unix() {
+        return task_error("task deadline has passed");
+    }
+    if !local_manifest
+        .body
+        .capabilities
+        .iter()
+        .any(|advertised| advertised.id == capability)
+    {
+        return task_error("capability not advertised");
+    }
+    let input_size = serde_json::to_vec(&input)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX);
+    if input_size > MAX_TASK_INPUT_BYTES {
+        return task_error("task input too large");
+    }
+
+    state.incoming_tasks.insert(
+        task_id.clone(),
+        IncomingTask {
+            peer,
+            capability,
+            input,
+            deadline_at,
+        },
+    );
+    RpcResponse::TaskAccepted { task_id }
+}
+
+fn handle_task_ready(
+    swarm: &mut Swarm<Behaviour>,
+    peer: PeerId,
+    task_id: String,
+    state: &mut NodeState,
+) -> RpcResponse {
+    let Some(task) = state.incoming_tasks.remove(&task_id) else {
+        return task_error("unknown task");
+    };
+    if task.peer != peer {
+        return task_error("task peer mismatch");
+    }
+
+    if task.deadline_at <= now_unix() {
+        send_task_event(
+            swarm,
+            peer,
+            &task_id,
+            1,
+            TaskEventKind::Failed {
+                message: "task deadline expired".to_owned(),
+            },
+        );
+        send_task_event(swarm, peer, &task_id, 2, TaskEventKind::Done);
+        return RpcResponse::TaskReadyAck { task_id };
+    }
+
+    match task.capability.as_str() {
+        "task.echo" => {
+            send_task_event(
+                swarm,
+                peer,
+                &task_id,
+                1,
+                TaskEventKind::Started {
+                    capability: task.capability.clone(),
+                },
+            );
+            send_task_event(
+                swarm,
+                peer,
+                &task_id,
+                2,
+                TaskEventKind::Progress {
+                    message: "processing".to_owned(),
+                    fraction: Some(0.5),
+                },
+            );
+            send_task_event(
+                swarm,
+                peer,
+                &task_id,
+                3,
+                TaskEventKind::Result {
+                    output: serde_json::json!({ "echo": task.input }),
+                },
+            );
+            send_task_event(swarm, peer, &task_id, 4, TaskEventKind::Done);
+        }
+        _ => {
+            send_task_event(
+                swarm,
+                peer,
+                &task_id,
+                1,
+                TaskEventKind::Failed {
+                    message: "no local handler for capability".to_owned(),
+                },
+            );
+            send_task_event(swarm, peer, &task_id, 2, TaskEventKind::Done);
+        }
+    }
+
+    RpcResponse::TaskReadyAck { task_id }
+}
+
+fn handle_task_event(
+    state: &mut NodeState,
+    task_id: String,
+    sequence: u64,
+    event: TaskEventKind,
+) -> RpcResponse {
+    if !state.active_tasks.contains_key(&task_id) {
+        return task_error("unknown task");
+    }
+
+    let terminal = matches!(&event, TaskEventKind::Done);
+    if let Some(active) = state.active_tasks.get_mut(&task_id) {
+        if sequence <= active.last_sequence {
+            return RpcResponse::TaskEventAck { task_id, sequence };
+        }
+        active.last_sequence = sequence;
+        let _ = active.events.try_send(TaskEvent {
+            task_id: task_id.clone(),
+            sequence,
+            event,
+        });
+    }
+    if terminal {
+        state.active_tasks.remove(&task_id);
+    }
+
+    RpcResponse::TaskEventAck { task_id, sequence }
+}
+
+fn send_task_event(
+    swarm: &mut Swarm<Behaviour>,
+    peer: PeerId,
+    task_id: &str,
+    sequence: u64,
+    event: TaskEventKind,
+) {
+    let _ = swarm.behaviour_mut().rpc.send_request(
+        &peer,
+        RpcRequest::TaskEventPush {
+            task_id: task_id.to_owned(),
+            sequence,
+            event,
+        },
+    );
+}
+
+fn new_task_id() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn respond_to_request(
@@ -657,17 +961,79 @@ fn respond_to_request(
                 policy: config.neighbor_policy.as_str().to_owned(),
             }
         }
+        RpcRequest::TaskStart {
+            task_id,
+            capability,
+            input,
+            deadline_at,
+        } => handle_task_start(
+            peer,
+            task_id,
+            capability,
+            input,
+            deadline_at,
+            local_manifest,
+            state,
+        ),
+        RpcRequest::TaskReady { task_id } => handle_task_ready(swarm, peer, task_id, state),
+        RpcRequest::TaskEventPush {
+            task_id,
+            sequence,
+            event,
+        } => handle_task_event(state, task_id, sequence, event),
     };
 
     let _ = swarm.behaviour_mut().rpc.send_response(channel, response);
 }
 
 fn handle_response(
+    swarm: &mut Swarm<Behaviour>,
     peer: PeerId,
     request_id: OutboundRequestId,
     response: RpcResponse,
     state: &mut NodeState,
 ) {
+    if let Some(pending) = state.pending_asks.remove(&request_id) {
+        let PendingAsk {
+            task_id: expected_task_id,
+            events,
+            receiver,
+            reply,
+        } = pending;
+
+        let result = match response {
+            RpcResponse::TaskAccepted { task_id } if task_id == expected_task_id => {
+                let Some(receiver) = receiver else {
+                    let _ = reply.send(Err(Error::Request(
+                        "task handle receiver already consumed".to_owned(),
+                    )));
+                    return;
+                };
+                state.active_tasks.insert(
+                    task_id.clone(),
+                    ActiveTask {
+                        events,
+                        last_sequence: 0,
+                    },
+                );
+                let _ = swarm.behaviour_mut().rpc.send_request(
+                    &peer,
+                    RpcRequest::TaskReady {
+                        task_id: task_id.clone(),
+                    },
+                );
+                Ok(TaskHandle {
+                    task_id,
+                    events: receiver,
+                })
+            }
+            RpcResponse::Error { message } => Err(Error::Request(message)),
+            _ => Err(Error::Request("unexpected task response".to_owned())),
+        };
+        let _ = reply.send(result);
+        return;
+    }
+
     if let Some(reply) = state.pending_manifests.remove(&request_id) {
         let result = match response {
             RpcResponse::Manifest(manifest) => {
@@ -681,8 +1047,12 @@ fn handle_response(
                 }
             }
             RpcResponse::Error { message } => Err(Error::Request(message)),
-            RpcResponse::Echo { .. } | RpcResponse::Neighbors { .. } => {
-                Err(Error::Request("unexpected echo response".to_owned()))
+            RpcResponse::Echo { .. }
+            | RpcResponse::Neighbors { .. }
+            | RpcResponse::TaskAccepted { .. }
+            | RpcResponse::TaskReadyAck { .. }
+            | RpcResponse::TaskEventAck { .. } => {
+                Err(Error::Request("unexpected manifest response".to_owned()))
             }
         };
         let _ = reply.send(result);
@@ -693,8 +1063,12 @@ fn handle_response(
         let result = match response {
             RpcResponse::Echo { message } => Ok(message),
             RpcResponse::Error { message } => Err(Error::Request(message)),
-            RpcResponse::Manifest(_) | RpcResponse::Neighbors { .. } => {
-                Err(Error::Request("unexpected manifest response".to_owned()))
+            RpcResponse::Manifest(_)
+            | RpcResponse::Neighbors { .. }
+            | RpcResponse::TaskAccepted { .. }
+            | RpcResponse::TaskReadyAck { .. }
+            | RpcResponse::TaskEventAck { .. } => {
+                Err(Error::Request("unexpected echo response".to_owned()))
             }
         };
         let _ = reply.send(result);
@@ -910,6 +1284,35 @@ fn handle_command(
                     let _ = reply.send(Err(Error::Dial(error.to_string())));
                 }
             }
+            true
+        }
+        Command::Ask {
+            peer,
+            capability,
+            input,
+            deadline_at,
+            reply,
+        } => {
+            let (events, receiver) = mpsc::channel(32);
+            let task_id = new_task_id();
+            let request_id = swarm.behaviour_mut().rpc.send_request(
+                &peer,
+                RpcRequest::TaskStart {
+                    task_id: task_id.clone(),
+                    capability,
+                    input,
+                    deadline_at,
+                },
+            );
+            state.pending_asks.insert(
+                request_id,
+                PendingAsk {
+                    task_id,
+                    events,
+                    receiver: Some(receiver),
+                    reply,
+                },
+            );
             true
         }
         Command::Shutdown => false,

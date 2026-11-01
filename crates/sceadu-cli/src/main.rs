@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -8,6 +9,7 @@ use sceadu_core::keystore;
 use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
 use sceadu_net::{
     spawn as spawn_node, spawn_with_config, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig,
+    TaskEventKind,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -26,6 +28,25 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum SkillCommand {
+    /// Write SKILL.md under the skill directory.
+    Install {
+        /// Override the skill directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Overwrite an existing SKILL.md.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the installed skill path.
+    Path {
+        /// Override the skill directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -67,6 +88,11 @@ enum Command {
         #[arg(long, default_value = "hello")]
         message: String,
     },
+    /// Install the Sceadu agent skill.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
     /// Issue a signed bootstrap invite for a known peer.
     Invite {
         /// Seed peer multiaddr, including /p2p/<peer-id>.
@@ -101,6 +127,21 @@ enum Command {
         peer: Multiaddr,
         /// AgentID to look up.
         agent_id: AgentId,
+    },
+    /// Ask a peer to run a capability and stream task events.
+    Ask {
+        /// Peer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        addr: Multiaddr,
+        /// Capability to invoke.
+        #[arg(long, default_value = "task.echo")]
+        capability: String,
+        /// JSON input object.
+        #[arg(long, default_value = "{}")]
+        input: String,
+        /// Task timeout in seconds.
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -244,6 +285,30 @@ async fn main() -> Result<()> {
 
             node.shutdown().await;
         }
+        Command::Skill { command } => match command {
+            SkillCommand::Install { dir, force } => {
+                let dir = skill_dir(dir)?;
+                fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+                let path = dir.join("SKILL.md");
+                if path.exists() && !force {
+                    bail!(
+                        "skill already exists at {}; use --force to overwrite",
+                        path.display()
+                    );
+                }
+                fs::write(&path, include_str!("../../../skills/sceadu/SKILL.md"))
+                    .with_context(|| format!("writing {}", path.display()))?;
+                print_json(&json!({
+                    "installed": path.display().to_string()
+                }))?;
+            }
+            SkillCommand::Path { dir } => {
+                let dir = skill_dir(dir)?;
+                print_json(&json!({
+                    "path": dir.join("SKILL.md").display().to_string()
+                }))?;
+            }
+        },
         Command::Invite { peer, ttl, out } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             let ticket = InviteTicket::issue(&identity, peer, ttl)?;
@@ -339,6 +404,48 @@ async fn main() -> Result<()> {
 
             node.shutdown().await;
         }
+        Command::Ask {
+            addr,
+            capability,
+            input,
+            timeout,
+        } => {
+            let input: serde_json::Value =
+                serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, _) = spawn_node(&identity, None).await?;
+            let peer = node.dial(addr).await?;
+            let _ = node.request_manifest(peer).await?;
+            let mut handle = node
+                .ask(peer, capability, input, Duration::from_secs(timeout))
+                .await?;
+
+            let mut failed = false;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(timeout), handle.next()).await {
+                    Ok(Some(event)) => {
+                        let done = matches!(&event.event, TaskEventKind::Done);
+                        if matches!(&event.event, TaskEventKind::Failed { .. }) {
+                            failed = true;
+                        }
+                        println!("{}", serde_json::to_string(&event)?);
+                        if done {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        node.shutdown().await;
+                        bail!("task timed out");
+                    }
+                }
+            }
+
+            node.shutdown().await;
+            if failed {
+                bail!("task failed");
+            }
+        }
         Command::Discover {
             addr,
             capability,
@@ -402,6 +509,20 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn default_skill_dir() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or_else(|| anyhow!("cannot determine home directory"))?;
+    Ok(PathBuf::from(home).join(".agents/skills/sceadu"))
+}
+
+fn skill_dir(dir: Option<PathBuf>) -> Result<PathBuf> {
+    match dir {
+        Some(dir) => Ok(dir),
+        None => default_skill_dir(),
+    }
 }
 
 fn parse_neighbor_policy(value: &str) -> Result<NeighborPolicy> {

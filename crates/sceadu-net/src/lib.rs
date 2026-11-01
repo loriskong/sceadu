@@ -25,8 +25,13 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+pub mod invite;
+pub use invite::InviteTicket;
+
 const PROTOCOL: &str = "/sceadu/rpc/1.0.0";
 const MANIFEST_TTL_SECONDS: u64 = 3600;
+const QUARANTINE_FAILURES: u32 = 3;
+const QUARANTINE_DURATION: Duration = Duration::from_secs(60);
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -57,6 +62,8 @@ pub enum Error {
     Dht(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("invite error: {0}")]
+    Invite(String),
     #[error("node task stopped")]
     Closed,
 }
@@ -133,7 +140,14 @@ type PendingNeighbors = (
 );
 
 #[derive(Default)]
+struct SourceStats {
+    failures: u32,
+    quarantined_until: Option<Instant>,
+}
+
+#[derive(Default)]
 struct NodeState {
+    sources: HashMap<PeerId, SourceStats>,
     manifests: HashMap<PeerId, Manifest>,
     pending_dials: HashMap<PeerId, oneshot::Sender<Result<PeerId>>>,
     pending_manifests: HashMap<OutboundRequestId, oneshot::Sender<Result<Manifest>>>,
@@ -576,7 +590,10 @@ fn handle_rpc_event(
             } => handle_response(peer, request_id, response, state),
         },
         request_response::Event::OutboundFailure {
-            request_id, error, ..
+            peer,
+            request_id,
+            error,
+            ..
         } => {
             let message = format!("request failed: {error}");
             if let Some(reply) = state.pending_manifests.remove(&request_id) {
@@ -586,6 +603,7 @@ fn handle_rpc_event(
                 let _ = reply.send(Err(Error::Request(message.clone())));
             }
             if let Some((_, _, _, reply)) = state.pending_neighbors.remove(&request_id) {
+                record_source_failure(state, &peer);
                 let _ = reply.send(Err(Error::Request(message)));
             }
         }
@@ -688,13 +706,29 @@ fn handle_response(
     {
         let result = match response {
             RpcResponse::Neighbors { records, nonce, .. } if nonce == expected_nonce => {
-                Ok(validate_contacts(records, capability.as_deref(), max))
+                let total = records.len();
+                let valid = validate_contacts(records, capability.as_deref(), max);
+                if valid.len() == total {
+                    record_source_success(state, &peer);
+                } else {
+                    record_source_failure(state, &peer);
+                }
+                Ok(valid)
             }
-            RpcResponse::Neighbors { .. } => Err(Error::Request(
-                "neighbor response nonce mismatch".to_owned(),
-            )),
-            RpcResponse::Error { message } => Err(Error::Request(message)),
-            _ => Err(Error::Request("unexpected neighbor response".to_owned())),
+            RpcResponse::Neighbors { .. } => {
+                record_source_failure(state, &peer);
+                Err(Error::Request(
+                    "neighbor response nonce mismatch".to_owned(),
+                ))
+            }
+            RpcResponse::Error { message } => {
+                record_source_failure(state, &peer);
+                Err(Error::Request(message))
+            }
+            _ => {
+                record_source_failure(state, &peer);
+                Err(Error::Request("unexpected neighbor response".to_owned()))
+            }
         };
         let _ = reply.send(result);
     }
@@ -760,6 +794,10 @@ fn handle_command(
             nonce,
             reply,
         } => {
+            if source_is_quarantined(state, &peer) {
+                let _ = reply.send(Err(Error::Request("introducer is quarantined".to_owned())));
+                return true;
+            }
             let request_id = swarm.behaviour_mut().rpc.send_request(
                 &peer,
                 RpcRequest::Neighbors {
@@ -975,6 +1013,28 @@ fn capability_key(capability: &str) -> RecordKey {
     RecordKey::new(&digest)
 }
 
+fn record_source_success(state: &mut NodeState, peer: &PeerId) {
+    let stats = state.sources.entry(*peer).or_default();
+    stats.failures = 0;
+    stats.quarantined_until = None;
+}
+
+fn record_source_failure(state: &mut NodeState, peer: &PeerId) {
+    let stats = state.sources.entry(*peer).or_default();
+    stats.failures = stats.failures.saturating_add(1);
+    if stats.failures >= QUARANTINE_FAILURES {
+        stats.quarantined_until = Some(Instant::now() + QUARANTINE_DURATION);
+    }
+}
+
+fn source_is_quarantined(state: &NodeState, peer: &PeerId) -> bool {
+    state
+        .sources
+        .get(peer)
+        .and_then(|stats| stats.quarantined_until)
+        .is_some_and(|until| until > Instant::now())
+}
+
 fn answer_neighbors(
     state: &NodeState,
     requester: &PeerId,
@@ -1159,6 +1219,20 @@ mod tests {
         let filtered = validate_contacts(vec![duplicate.clone(), duplicate], Some("task.echo"), 8);
 
         assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn quarantines_repeated_source_failures() {
+        let mut state = NodeState::default();
+        let peer = peer_id_for_agent_id(&Identity::generate().agent_id()).unwrap();
+
+        for _ in 0..QUARANTINE_FAILURES {
+            record_source_failure(&mut state, &peer);
+        }
+        assert!(source_is_quarantined(&state, &peer));
+
+        record_source_success(&mut state, &peer);
+        assert!(!source_is_quarantined(&state, &peer));
     }
 
     #[test]

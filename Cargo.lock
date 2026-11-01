@@ -2973,8 +2973,12 @@ dependencies = [
 name = "sceadu-net"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ciborium",
+ "ed25519-dalek 2.2.0",
  "futures",
  "libp2p",
+ "rand_core 0.6.4",
  "sceadu-core",
  "serde",
  "serde_json",

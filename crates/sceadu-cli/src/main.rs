@@ -5,8 +5,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sceadu_core::keystore;
-use sceadu_core::{Capability, Identity, Manifest, ManifestBody};
-use sceadu_net::{spawn as spawn_node, spawn_with_config, Multiaddr, NeighborPolicy, NodeConfig};
+use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
+use sceadu_net::{
+    spawn as spawn_node, spawn_with_config, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig,
+};
 use serde::Serialize;
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -64,6 +66,41 @@ enum Command {
         /// Message to echo.
         #[arg(long, default_value = "hello")]
         message: String,
+    },
+    /// Issue a signed bootstrap invite for a known peer.
+    Invite {
+        /// Seed peer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        peer: Multiaddr,
+        /// Lifetime in seconds.
+        #[arg(long, default_value_t = 3600)]
+        ttl: u64,
+        /// Write the encoded invite to a file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Verify an invite and bootstrap from its seed.
+    Join {
+        /// Encoded invite string.
+        #[arg(long)]
+        ticket: Option<String>,
+        /// File containing an encoded invite.
+        #[arg(long)]
+        ticket_file: Option<PathBuf>,
+    },
+    /// Publish this identity's manifest and capability provider records to the DHT.
+    Publish {
+        /// DHT peer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        peer: Multiaddr,
+    },
+    /// Look up an agent's manifest in the DHT.
+    Lookup {
+        /// DHT peer multiaddr, including /p2p/<peer-id>.
+        #[arg(long)]
+        peer: Multiaddr,
+        /// AgentID to look up.
+        agent_id: AgentId,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -203,6 +240,101 @@ async fn main() -> Result<()> {
                 "peer": peer.to_string(),
                 "agent_id": manifest.body.agent_id.to_string(),
                 "echo": reply
+            }))?;
+
+            node.shutdown().await;
+        }
+        Command::Invite { peer, ttl, out } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let ticket = InviteTicket::issue(&identity, peer, ttl)?;
+            let encoded = ticket.encode()?;
+            let seed = ticket.seed()?;
+
+            if let Some(path) = out {
+                std::fs::write(&path, format!("{encoded}\n"))
+                    .with_context(|| format!("writing {}", path.display()))?;
+                print_json(&json!({
+                    "out": path.display().to_string(),
+                    "issuer": ticket.issuer().to_string(),
+                    "seed": seed.to_string(),
+                    "expires_at": ticket.expires_at()
+                }))?;
+            } else {
+                print_json(&json!({
+                    "invite": encoded,
+                    "issuer": ticket.issuer().to_string(),
+                    "seed": seed.to_string(),
+                    "expires_at": ticket.expires_at()
+                }))?;
+            }
+        }
+        Command::Join {
+            ticket,
+            ticket_file,
+        } => {
+            let encoded = match (ticket, ticket_file) {
+                (Some(ticket), None) => ticket,
+                (None, Some(path)) => std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?
+                    .trim()
+                    .to_owned(),
+                _ => bail!("provide exactly one of --ticket or --ticket-file"),
+            };
+            let ticket = InviteTicket::decode(&encoded)?;
+            let seed = ticket.seed()?;
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, _) = spawn_node(&identity, None).await?;
+            let peer = node.dial(seed.clone()).await?;
+            let manifest = node.request_manifest(peer).await?;
+
+            print_json(&json!({
+                "issuer": ticket.issuer().to_string(),
+                "seed": seed.to_string(),
+                "introducer_peer": peer.to_string(),
+                "introducer_agent_id": manifest.body.agent_id.to_string()
+            }))?;
+
+            node.shutdown().await;
+        }
+        Command::Publish { peer } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, listen) = spawn_node(
+                &identity,
+                Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>()?),
+            )
+            .await?;
+            let listen = listen.ok_or_else(|| anyhow!("no listen address"))?;
+            let peer_id = node.dial(peer.clone()).await?;
+            node.add_address(peer_id, peer.clone()).await?;
+            node.bootstrap().await?;
+            node.publish().await?;
+            node.provide("task.echo").await?;
+
+            print_json(&json!({
+                "agent_id": node.agent_id().to_string(),
+                "listen": listen.to_string(),
+                "peer": peer_id.to_string(),
+                "dht_peer": peer.to_string(),
+                "capabilities": ["task.echo"]
+            }))?;
+
+            node.shutdown().await;
+        }
+        Command::Lookup { peer, agent_id } => {
+            let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+            let (node, _) = spawn_node(
+                &identity,
+                Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>()?),
+            )
+            .await?;
+            let peer_id = node.dial(peer.clone()).await?;
+            node.add_address(peer_id, peer.clone()).await?;
+            node.bootstrap().await?;
+            let manifest = node.lookup(agent_id).await?;
+
+            print_json(&json!({
+                "dht_peer": peer_id.to_string(),
+                "manifest": manifest
             }))?;
 
             node.shutdown().await;

@@ -6,7 +6,11 @@ rust-version.workspace = true
 description = "libp2p transport and session layer for Sceadu"
 
 [dependencies]
+base64.workspace = true
+ciborium.workspace = true
+ed25519-dalek.workspace = true
 futures.workspace = true
+rand_core.workspace = true
 libp2p.workspace = true
 sceadu-core = { path = "../sceadu-core" }
 serde.workspace = true

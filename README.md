@@ -2,28 +2,28 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M3 complete, MCP deferred).** M1 and M2 are complete. M3 adds a streaming task protocol, CLI `ask`, and `skill install`. The MCP bridge is intentionally deferred; the CLI JSON interface is the agent interface for now.
+> **Status: pre-alpha (M3 complete, MCP deferred).** M1 and M2 are complete. M3 adds a streaming task protocol, CLI `ask`, and `skill install`. The MCP bridge is intentionally deferred; the CLI JSON interface is the agent interface for now. Networking is currently direct TCP + Noise with manual seeds; NAT traversal, relay, public bootstrap, and QUIC are not implemented.
 
 ## What it does
 
 - **No central server.** Every Sceadu instance is a node. There is no global registry, routing service, or message broker.
 - **Self-certifying identity.** An agent's Ed25519 public key is its identity. No account, email address, or phone number is required.
-- **Discovery without a global index.** A structured DHT handles capability lookup and cold start. Agent-mediated discovery lets nodes ask neighbors for introductions, with verification instead of blind trust.
-- **End-to-end encrypted sessions.** Nodes connect over Noise, with relay fallback when direct connections are not possible. Relays forward ciphertext only.
-- **Agent-native tasks.** Signed capability manifests, task requests, streaming events, and an MCP bridge let agents call each other's tools.
+- **Discovery with a manual seed.** A structured DHT stores signed manifests and capability provider records. With at least one reachable seed, nodes can look up agents and ask neighbors for introductions, with verification instead of blind trust. There is no public bootstrap network yet.
+- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. NAT traversal, relay fallback, and QUIC are not implemented yet.
+- **Agent-native tasks.** Signed capability manifests, streaming task requests, and a reference `task.echo` handler let agents call each other. The MCP bridge is deferred.
 - **CLI + skill.** The product is a single CLI binary. `sceadu skill install` writes an agent skill that teaches a local agent how to use it.
 
 ## How it works
 
 ```text
 Agent runtime
-    | local IPC / HTTP
-Sceadu daemon
-    |-- agent protocol: manifests, tasks, MCP bridge
-    |-- session: envelopes, streams, deadlines
-    |-- discovery: DHT + agent-mediated neighbor queries
-    |-- transport: rust-libp2p, Noise, QUIC/TCP, relay
-    `-- identity: Ed25519 keys, signed records
+    | CLI JSON (current); daemon IPC/HTTP (planned)
+Sceadu CLI
+    |-- task protocol: manifests, TaskStart/TaskReady, streaming events
+    |-- session: Noise-authenticated request/response streams, deadlines
+    |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
+    |-- transport: TCP + Noise + Yamux (NAT traversal/relay/QUIC planned)
+    `-- identity: Ed25519 keys, signed manifests and invites
 ```
 
 The core is written in Rust. The desktop CLI is the first delivery target; mobile companion apps will reuse the same core through UniFFI.
@@ -66,7 +66,7 @@ The release installer is planned for M4. The intended flow is:
 2. Put it on `PATH`.
 3. Run `sceadu skill install` to register the agent skill in `~/.agents/skills/sceadu/`.
 
-No installer exists yet. Do not expect the commands above to work at M0.
+No installer exists yet. Do not expect the installer flow above to work yet.
 
 ## Usage
 
@@ -149,7 +149,7 @@ sceadu daemon start
 sceadu status --json
 ```
 
-All planned commands support `--json` for agent consumption.
+NAT traversal, circuit relay, public bootstrap nodes, external address advertisement, and QUIC are prerequisites for internet-wide use. They are not part of M3.
 
 ## Discovery
 
@@ -160,6 +160,12 @@ M2 implements two complementary discovery paths:
 - **Multi-source merge:** the library `discover` API queries multiple introducers, de-duplicates by AgentID, and skips failed introducers rather than failing the whole result.
 
 `serve --neighbor-policy` controls the responder, and `serve --peer` seeds a node with known peers. `discover` exercises the agent-mediated path from the CLI. Signed invites (`invite`/`join`), source quarantine, and DHT `publish`/`lookup` are implemented. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+
+## Public-network readiness
+
+The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records, but it does not relay task traffic.
+
+Two agents behind typical NATs can discover each other through a seed and still fail to open a direct task session. There is no NAT traversal, circuit relay, public bootstrap network, external address advertisement, QUIC transport, or background daemon yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
 
 ## Tasks
 
@@ -180,7 +186,7 @@ M3 adds a streaming task protocol on the existing Noise session:
 ## Update
 
 - **M4 and later:** `sceadu update` checks the release channel, verifies the signature and checksum, and replaces the binary.
-- **Design document:** updated by CI on every push to the default branch.
+- **Design document:** the code log is appended by the manual sync script after a push. CI sync is optional and not enabled.
 - **This repository:** update with `git pull` and rebuild from source.
 
 ## Repository layout

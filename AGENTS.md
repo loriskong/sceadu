@@ -51,6 +51,14 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 - Before committing, confirm `git config user.email` is `imloriskong@gmail.com`.
 - The first local history was rebuilt so published commits are attributed only to `imloriskong`.
 
+## Release convention
+
+- Cargo version: `0.1.0`.
+- Tag format: `v0.1.0-buildYYYYMMDD`; at most one build tag per date.
+- Releases are private pre-releases. Build assets are downloaded on a trusted machine and copied to test hosts with `scp`.
+- Assets are static `x86_64-unknown-linux-musl` tarballs with `sceadu`, `install.sh`, `SKILL.md`, `README.md`, `AGENTS.md`, and SHA-256. Target hosts do not need Rust.
+- See `docs/release.md`.
+
 ## Design document sync
 
 - Current mode: manual. After a push, run:

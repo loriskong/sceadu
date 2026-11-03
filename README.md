@@ -61,13 +61,20 @@ cargo run -p sceadu-cli -- --help
 
 ## Install
 
-The release installer is planned for M4. The intended flow is:
+Test releases use the tag convention `v0.1.0-buildYYYYMMDD` and a private static
+Linux tarball. Download the release asset on a trusted machine, verify its
+SHA-256, copy it to the target host, and run the bundled installer:
 
-1. Download the `sceadu` binary for your platform from the release page.
-2. Put it on `PATH`.
-3. Run `sceadu skill install` to register the agent skill in `~/.agents/skills/sceadu/`.
+```sh
+tar -xzf sceadu-v0.1.0-buildYYYYMMDD-x86_64-unknown-linux-musl.tar.gz
+cd sceadu
+./install.sh
+sceadu --version
+```
 
-No installer exists yet. Do not expect the installer flow above to work yet.
+The installer writes `sceadu` to `~/.local/bin/` and the skill to
+`~/.agents/skills/sceadu/` without sudo. See [docs/release.md](docs/release.md)
+for the full convention and private-release copy flow.
 
 ## Usage
 

@@ -2,14 +2,14 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M4a connectivity foundation).** M1, M2, and M3 are complete. M4a adds a connectivity policy, a reachability/address model, `sceadu net status`, and fail-closed privacy/relay behavior. Actual NAT traversal, UPnP/NAT-PMP/PCP, relay, Tor, and I2P transports are the next M4b/M4c steps. The MCP bridge remains deferred.
+> **Status: pre-alpha (M4b connectivity).** M1, M2, and M3 are complete. M4a added the connectivity policy and address/status model. M4b adds circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping. Tor/I2P and QUIC remain M4c work; the MCP bridge remains deferred.
 
 ## What it does
 
 - **No central server.** Every Sceadu instance is a node. There is no global registry, routing service, or message broker.
 - **Self-certifying identity.** An agent's Ed25519 public key is its identity. No account, email address, or phone number is required.
 - **Discovery with a manual seed.** A structured DHT stores signed manifests and capability provider records. With at least one reachable seed, nodes can look up agents and ask neighbors for introductions, with verification instead of blind trust. There is no public bootstrap network yet.
-- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. NAT traversal, relay fallback, and QUIC are not implemented yet.
+- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. Circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping are available; QUIC, Tor, and I2P are not implemented yet.
 - **Agent-native tasks.** Signed capability manifests, streaming task requests, and a reference `task.echo` handler let agents call each other. The MCP bridge is deferred.
 - **CLI + skill.** The product is a single CLI binary. `sceadu skill install` writes an agent skill that teaches a local agent how to use it.
 
@@ -23,7 +23,7 @@ Sceadu CLI
     |-- session: Noise-authenticated request/response streams, deadlines
     |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
     |-- connectivity: policy + address book + reachability status
-    |-- transport: TCP + Noise + Yamux (NAT traversal/relay/QUIC planned)
+    |-- transport: TCP + Noise + Yamux; relay v2, AutoNAT/DCUtR, port mapping (QUIC planned)
     `-- identity: Ed25519 keys, signed manifests and invites
 ```
 
@@ -150,9 +150,9 @@ sceadu daemon start
 sceadu status --json
 ```
 
-Connectivity roadmap: M4b adds UPnP/NAT-PMP/PCP and native AutoNAT/DCUtR/relay v2;
+Connectivity roadmap: M4b is implemented (UPnP/NAT-PMP/PCP, AutoNAT/DCUtR, relay v2);
 M4c adds optional Tor/I2P transports and strict privacy routing. `net status`
-reports planned transports as unavailable until then.
+reports unimplemented transports as unavailable.
 
 NAT traversal, circuit relay, public bootstrap nodes, external address advertisement, and QUIC are prerequisites for internet-wide use. They are not part of M3.
 
@@ -168,29 +168,37 @@ M2 implements two complementary discovery paths:
 
 ## Connectivity
 
-M4a introduces a connectivity policy layer:
+M4b implements the first real NAT-reachability paths:
 
-- `auto`: use the best available path; currently direct TCP.
-- `direct`: only direct TCP.
-- `relay`: require a relay path; fails closed until relay exists.
-- `privacy`: require Tor or I2P; fails closed and refuses a cleartext listener.
+- `auto`: use direct TCP or a configured relay path.
+- `direct`: only direct TCP; relayed addresses are rejected.
+- `relay`: use a relay path. A relay client must pass `--relay`; a relay server
+  uses `--relay-server` and needs a direct listen address.
+- `privacy`: still fails closed until Tor/I2P lands in M4c.
 
 `sceadu net status` reports the policy, local reachability (`loopback`, `private`,
 `public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, `unknown`),
-available transports, and known endpoints. Address records carry transport,
-reachability, source, and verification state. This is the foundation for the
-Bitcoin-style reachable/unreachable address policy; feeler probes and manifest
-endpoint metadata come with the transports.
+transport availability, known endpoints, external endpoint, and relay
+reservation. Address records carry transport, reachability, source, and
+verification state.
 
-M4a does not yet implement UPnP/NAT-PMP/PCP, AutoNAT/DCUtR/circuit relay, Tor, or
-I2P. `relay` and `privacy` fail closed by design: no silent downgrade to direct
-TCP, and no cleartext listener under a privacy policy.
+Implemented in M4b:
+
+- Circuit relay v2 client and server; relayed addresses use `/p2p-circuit` and
+  are advertised in the signed manifest.
+- AutoNAT reachability probes and DCUtR hole-punching behaviour.
+- UPnP/NAT-PMP/PCP port mapping via `portmapper` when `--port-mapping` is set.
+  The external mapping is added to the address book and manifest when it
+  appears.
+
+M4c still needs Tor/I2P, public bootstrap/relay infrastructure, and QUIC. The
+`privacy` policy remains fail-closed: no cleartext listener and no fallback.
 
 ## Public-network readiness
 
-The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records, but it does not relay task traffic.
+The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records; circuit relay v2 can carry task traffic when a relay is configured.
 
-Two agents behind typical NATs can discover each other through a seed and still fail to open a direct task session. NAT traversal, circuit relay, public bootstrap, external address advertisement, and QUIC are not implemented yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
+Relay v2, AutoNAT/DCUtR, and port mapping work, but there is no public bootstrap/relay network, no external-address advertisement for arbitrary NATs, and no Tor/I2P or QUIC yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
 
 ## Tasks
 

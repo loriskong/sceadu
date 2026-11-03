@@ -40,6 +40,15 @@ enum NetCommand {
         /// Connectivity policy to report.
         #[arg(long, default_value = "auto")]
         connectivity: String,
+        /// Relay peer to reserve a circuit with.
+        #[arg(long)]
+        relay: Option<Multiaddr>,
+        /// Act as a circuit relay v2 server.
+        #[arg(long)]
+        relay_server: bool,
+        /// Request UPnP/NAT-PMP/PCP port mappings.
+        #[arg(long)]
+        port_mapping: bool,
     },
 }
 
@@ -91,6 +100,15 @@ enum Command {
         /// Connectivity policy: auto, direct, relay, or privacy.
         #[arg(long, default_value = "auto")]
         connectivity: String,
+        /// Relay peer to reserve a circuit with.
+        #[arg(long)]
+        relay: Option<Multiaddr>,
+        /// Act as a circuit relay v2 server.
+        #[arg(long)]
+        relay_server: bool,
+        /// Request UPnP/NAT-PMP/PCP port mappings.
+        #[arg(long)]
+        port_mapping: bool,
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
@@ -166,6 +184,9 @@ enum Command {
         /// Connectivity policy: auto, direct, relay, or privacy.
         #[arg(long, default_value = "auto")]
         connectivity: String,
+        /// Relay peer to reserve a circuit with.
+        #[arg(long)]
+        relay: Option<Multiaddr>,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -250,17 +271,28 @@ async fn main() -> Result<()> {
             listen,
             neighbor_policy,
             connectivity,
+            relay,
+            relay_server,
+            port_mapping,
             peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             let policy = parse_neighbor_policy(&neighbor_policy)?;
             let connectivity_policy = parse_connectivity_policy(&connectivity)?;
+            let listen = if connectivity_policy == ConnectivityPolicy::Relay && !relay_server {
+                None
+            } else {
+                Some(listen)
+            };
             let (node, address) = spawn_with_config(
                 &identity,
-                Some(listen),
+                listen,
                 NodeConfig {
                     neighbor_policy: policy,
                     connectivity_policy,
+                    relay,
+                    relay_server,
+                    port_mapping,
                 },
             )
             .await?;
@@ -289,6 +321,8 @@ async fn main() -> Result<()> {
                 "capabilities": ["task.echo"],
                 "neighbor_policy": policy.as_str(),
                 "connectivity_policy": connectivity_policy.as_str(),
+                "port_mapping": port_mapping,
+                "relay_server": relay_server,
                 "peers": bootstrapped,
                 "note": "press Ctrl-C to stop"
             }))?;
@@ -317,10 +351,15 @@ async fn main() -> Result<()> {
             NetCommand::Status {
                 listen,
                 connectivity,
+                relay,
+                relay_server,
+                port_mapping,
             } => {
                 let identity = load_identity(&cli.path, &cli.passphrase_file)?;
                 let connectivity_policy = parse_connectivity_policy(&connectivity)?;
-                let listen = if matches!(
+                let listen = if connectivity_policy == ConnectivityPolicy::Relay && !relay_server {
+                    None
+                } else if matches!(
                     connectivity_policy,
                     ConnectivityPolicy::Auto | ConnectivityPolicy::Direct
                 ) {
@@ -333,6 +372,9 @@ async fn main() -> Result<()> {
                     listen,
                     NodeConfig {
                         connectivity_policy,
+                        relay,
+                        relay_server,
+                        port_mapping,
                         ..Default::default()
                     },
                 )
@@ -467,6 +509,7 @@ async fn main() -> Result<()> {
             input,
             timeout,
             connectivity,
+            relay,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
@@ -477,6 +520,7 @@ async fn main() -> Result<()> {
                 None,
                 NodeConfig {
                     connectivity_policy,
+                    relay,
                     ..Default::default()
                 },
             )

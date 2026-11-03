@@ -27,6 +27,13 @@ sceadu serve --listen /ip4/127.0.0.1/tcp/0 --peer <seed-address>
 sceadu serve --neighbor-policy stealth
 sceadu serve --connectivity direct
 
+# Relay v2: run a relay, or reserve a circuit through one
+sceadu serve --listen /ip4/0.0.0.0/tcp/4001 --relay-server
+sceadu serve --connectivity relay --relay <relay-address>
+
+# Ask the router to map a port (UPnP/NAT-PMP/PCP)
+sceadu serve --listen /ip4/0.0.0.0/tcp/4001 --port-mapping
+
 # Discovery
 sceadu discover --addr <introducer-address> --capability task.echo
 
@@ -53,15 +60,25 @@ policy, local reachability (`loopback`, `private`, `public_unverified`,
 `public_verified`, `relay`, `tor`, `i2p`, or `unknown`), available transports,
 and known endpoints.
 
-- `auto`: use the best available path. Currently this means direct TCP.
-- `direct`: only direct TCP. Fail rather than silently using another path.
-- `relay`: require a relay path. Not implemented yet; fails closed.
+- `auto`: use direct TCP or a configured relay path.
+- `direct`: only direct TCP. Relayed `/p2p-circuit` addresses are rejected.
+- `relay`: require a relay path. Pass `--relay` for a relay client or
+  `--relay-server` for a relay server; otherwise it fails closed.
 - `privacy`: require Tor or I2P. Not implemented yet; fails closed and refuses a
   cleartext listener.
 
-Do not claim a transport is available from the policy name alone; read
-`net status`. NAT traversal, UPnP/NAT-PMP/PCP, relay, Tor, and I2P are planned
-for M4b/M4c and are reported as unavailable until implemented.
+Relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping are implemented in
+M4b. Tor/I2P and QUIC are M4c. Do not claim a transport is available from the
+policy name alone; read `net status`.
+
+A relayed address looks like:
+
+```text
+/ip4/<relay-ip>/tcp/<port>/p2p/<relay-id>/p2p-circuit/p2p/<target-id>
+```
+
+Port mapping is opt-in. It asks the local router for a mapping; it does not
+guarantee that the external address is reachable from the public internet.
 
 ## Agent workflow
 

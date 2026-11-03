@@ -6,7 +6,7 @@ This file is loaded by DSH-compatible agents as project context. Keep it accurat
 
 Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, discover each other through a structured DHT plus agent-mediated neighbor discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
 
-Current stage: pre-alpha (M4a connectivity foundation). M3 is complete and the MCP bridge is deferred. The MVP is defined in section 4.3 of the design document.
+Current stage: pre-alpha (M4b connectivity). M3 is complete and the MCP bridge is deferred. The MVP is defined in section 4.3 of the design document.
 
 ## Sources of truth
 
@@ -27,7 +27,7 @@ Current stage: pre-alpha (M4a connectivity foundation). M3 is complete and the M
 - DHT discovery first; agent-mediated neighbor discovery next.
 - No Sybil protection in alpha: invite-only / small networks. Do not add tokens, staking, or PoW silently.
 - Anonymity scope: content confidentiality and pseudonymity by default. Tor/I2P are optional transports that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.
-- Connectivity is a first-class policy layer: native libp2p equivalents for STUN/TURN/ICE-like behavior (AutoNAT/DCUtR/relay v2), UPnP/NAT-PMP/PCP, and optional Tor/I2P. Agents select `auto`, `direct`, `relay`, or `privacy`; `privacy` never silently falls back to clearnet.
+- Connectivity is a first-class policy layer: native libp2p equivalents for STUN/TURN/ICE-like behavior (AutoNAT/DCUtR/relay v2), UPnP/NAT-PMP/PCP, and optional Tor/I2P. Agents select `auto`, `direct`, `relay`, or `privacy`; `privacy` never silently falls back to clearnet. `relay` requires `--relay` or `--relay-server`; `direct` rejects `/p2p-circuit` addresses.
 - Out of MVP: mobile apps, mixnet, offline messaging, groups, payments, GUI, key recovery.
 
 Any change to these requires an explicit decision in the design document.
@@ -86,4 +86,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1, M2, and M3 are complete. M4a is implemented: connectivity policy (`auto`/`direct`/`relay`/`privacy`), reachability classification, address book, `sceadu net status`, and fail-closed relay/privacy behavior. M4b is next: UPnP/NAT-PMP/PCP plus AutoNAT/DCUtR/circuit relay v2. M4c adds optional Tor/I2P transports. The MCP bridge remains deferred by explicit user decision; do not add it without a new decision. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+M1, M2, and M3 are complete. M4a and M4b are implemented: connectivity policy and address book, `sceadu net status`, circuit relay v2 client/server, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping. M4c is next: optional Tor/I2P transports, public bootstrap/relay infrastructure, and QUIC. The MCP bridge remains deferred by explicit user decision; do not add it without a new decision. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.

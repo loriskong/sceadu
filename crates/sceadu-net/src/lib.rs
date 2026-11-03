@@ -4,12 +4,14 @@
 //! echo RPC over a libp2p request/response stream.
 
 use std::collections::{HashMap, HashSet};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4};
+use std::num::NonZeroU16;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use futures::StreamExt;
+use libp2p::autonat::NatStatus;
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
 use libp2p::kad::{
@@ -19,6 +21,7 @@ use libp2p::multiaddr::Protocol;
 use libp2p::request_response::{
     self, Message, OutboundRequestId, ProtocolSupport, ResponseChannel,
 };
+use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 pub use libp2p::{Multiaddr, PeerId};
@@ -44,6 +47,10 @@ const MAX_TASK_ID_LEN: usize = 128;
 struct Behaviour {
     rpc: request_response::json::Behaviour<RpcRequest, RpcResponse>,
     kad: libp2p::kad::Behaviour<MemoryStore>,
+    autonat: libp2p::autonat::Behaviour,
+    dcutr: libp2p::dcutr::Behaviour,
+    relay_client: libp2p::relay::client::Behaviour,
+    relay_server: Toggle<libp2p::relay::Behaviour>,
 }
 
 /// Errors returned by the network layer.
@@ -191,6 +198,8 @@ impl ConnectivityPolicy {
 pub enum TransportKind {
     Tcp,
     Relay,
+    #[serde(rename = "port_mapping")]
+    PortMapping,
     Tor,
     #[serde(rename = "i2p")]
     I2P,
@@ -201,6 +210,7 @@ impl TransportKind {
         match self {
             Self::Tcp => "tcp",
             Self::Relay => "relay",
+            Self::PortMapping => "port_mapping",
             Self::Tor => "tor",
             Self::I2P => "i2p",
         }
@@ -264,13 +274,22 @@ pub struct NetworkStatus {
     pub reachability: Reachability,
     pub transports: Vec<TransportStatus>,
     pub endpoints: Vec<EndpointRecord>,
+    pub external_endpoint: Option<String>,
+    pub port_mapping: bool,
+    pub relay_reservation: Option<String>,
 }
 
 /// Node behavior configuration.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NodeConfig {
     pub neighbor_policy: NeighborPolicy,
     pub connectivity_policy: ConnectivityPolicy,
+    /// Optional relay peer to reserve a circuit with.
+    pub relay: Option<Multiaddr>,
+    /// Whether this node also acts as a circuit relay server.
+    pub relay_server: bool,
+    /// Whether to request UPnP/NAT-PMP/PCP port mappings.
+    pub port_mapping: bool,
 }
 
 /// One event in a remote task stream.
@@ -368,6 +387,12 @@ struct NodeState {
     address_book: AddressBook,
     pending_dial_endpoints: HashMap<PeerId, String>,
     connectivity_policy: ConnectivityPolicy,
+    port_mapping: bool,
+    relay_enabled: bool,
+    relay_server: bool,
+    external_endpoint: Option<String>,
+    autonat_reachability: Option<Reachability>,
+    relay_reservation: Option<PeerId>,
     pending_asks: HashMap<OutboundRequestId, PendingAsk>,
     active_tasks: HashMap<String, ActiveTask>,
     incoming_tasks: HashMap<String, IncomingTask>,
@@ -697,21 +722,54 @@ pub async fn spawn_with_config(
     listen: Option<Multiaddr>,
     config: NodeConfig,
 ) -> Result<(NodeHandle, Option<Multiaddr>)> {
-    if listen.is_some()
-        && matches!(
-            config.connectivity_policy,
-            ConnectivityPolicy::Relay | ConnectivityPolicy::Privacy
-        )
-    {
-        return Err(Error::Unsupported(
-            "relay/privacy transports are not implemented; disable the cleartext listener"
-                .to_owned(),
-        ));
+    match config.connectivity_policy {
+        ConnectivityPolicy::Privacy => {
+            if listen.is_some() {
+                return Err(Error::Unsupported(
+                    "Tor/I2P transports are not implemented; privacy policy must not open a cleartext listener"
+                        .to_owned(),
+                ));
+            }
+        }
+        ConnectivityPolicy::Relay => {
+            if config.relay.is_none() && !config.relay_server {
+                return Err(Error::Unsupported(
+                    "relay policy requires --relay or --relay-server".to_owned(),
+                ));
+            }
+            if !config.relay_server && listen.is_some() {
+                return Err(Error::Unsupported(
+                    "relay client policy must not open a direct listener".to_owned(),
+                ));
+            }
+            if config.relay_server && listen.is_none() {
+                return Err(Error::Unsupported(
+                    "relay server requires a direct listen address".to_owned(),
+                ));
+            }
+        }
+        ConnectivityPolicy::Direct => {
+            if config.relay.is_some() || config.relay_server {
+                return Err(Error::Unsupported(
+                    "direct policy does not allow relay configuration".to_owned(),
+                ));
+            }
+        }
+        ConnectivityPolicy::Auto => {}
     }
     let mut seed = identity.to_seed();
     let keypair = Keypair::ed25519_from_bytes(&mut seed.expose()[..])
         .map_err(|error| Error::Identity(error.to_string()))?;
     let peer_id = keypair.public().to_peer_id();
+
+    let relay_server = if config.relay_server {
+        let mut behaviour =
+            libp2p::relay::Behaviour::new(peer_id, libp2p::relay::Config::default());
+        behaviour.set_status(Some(libp2p::relay::Status::Enable));
+        Some(behaviour)
+    } else {
+        None
+    };
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -721,27 +779,112 @@ pub async fn spawn_with_config(
             libp2p::yamux::Config::default,
         )
         .map_err(|error| Error::Transport(error.to_string()))?
-        .with_behaviour(|key| {
+        .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)
+        .map_err(|error| Error::Transport(error.to_string()))?
+        .with_behaviour(move |key, relay_client| {
             let peer_id = key.public().to_peer_id();
             let mut kad = libp2p::kad::Behaviour::new(peer_id, MemoryStore::new(peer_id));
             kad.set_mode(Some(libp2p::kad::Mode::Server));
             Behaviour {
                 rpc: rpc_behaviour(),
                 kad,
+                autonat: libp2p::autonat::Behaviour::new(
+                    peer_id,
+                    libp2p::autonat::Config::default(),
+                ),
+                dcutr: libp2p::dcutr::Behaviour::new(peer_id),
+                relay_client,
+                relay_server: Toggle::from(relay_server),
             }
         })
         .map_err(|error| Error::Behaviour(error.to_string()))?
         .with_swarm_config(|config| config.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
-    let listen_addr = if let Some(listen) = listen {
+    let relay_target = config.relay.as_ref().map(|relay| {
+        if relay
+            .iter()
+            .any(|protocol| protocol == Protocol::P2pCircuit)
+        {
+            relay.clone()
+        } else {
+            relay.clone().with(Protocol::P2pCircuit)
+        }
+    });
+    if let Some(relay) = config.relay.as_ref() {
+        if let Some(relay_peer) = peer_from_multiaddr(relay) {
+            if !swarm.is_connected(&relay_peer) {
+                swarm
+                    .dial(relay.clone())
+                    .map_err(|error| Error::Dial(error.to_string()))?;
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    wait_for_connection(&mut swarm, relay_peer),
+                )
+                .await
+                .map_err(|_| Error::Dial("timed out connecting to relay".to_owned()))??;
+            }
+        }
+    }
+
+    let mut listen_targets = Vec::new();
+    if let Some(listen) = listen {
+        listen_targets.push(listen);
+    }
+    if let Some(relay) = relay_target {
+        listen_targets.push(relay);
+    }
+    for target in &listen_targets {
         swarm
-            .listen_on(listen)
+            .listen_on(target.clone())
             .map_err(|error| Error::Listen(error.to_string()))?;
+    }
+
+    let listen_addr = if listen_targets.is_empty() {
+        None
+    } else {
         let address = tokio::time::timeout(Duration::from_secs(5), wait_for_listen(&mut swarm))
             .await
             .map_err(|_| Error::Listen("timed out waiting for a listen address".to_owned()))??;
-        Some(address.with(Protocol::P2p(peer_id)))
+        Some(ensure_peer_id(address, peer_id))
+    };
+
+    if config.relay_server {
+        if let Some(address) = &listen_addr {
+            swarm.add_external_address(address.clone());
+        }
+    }
+
+    let port_mapping_rx = if config.port_mapping {
+        listen_addr
+            .as_ref()
+            .filter(|address| !is_relayed(address))
+            .and_then(tcp_port)
+            .map(|port| {
+                let client = portmapper::Client::new(portmapper::Config {
+                    protocol: portmapper::Protocol::Tcp,
+                    ..Default::default()
+                });
+                client.update_local_port(port);
+                let mut watch = client.watch_external_address();
+                let (sender, receiver) = mpsc::channel(8);
+                tokio::spawn(async move {
+                    let _client = client;
+                    let initial = *watch.borrow();
+                    if let Some(address) = initial {
+                        let _ = sender.send(address).await;
+                    }
+                    while watch.changed().await.is_ok() {
+                        let current = *watch.borrow();
+                        if let Some(address) = current {
+                            if sender.send(address).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                });
+                receiver
+            })
     } else {
         None
     };
@@ -755,7 +898,14 @@ pub async fn spawn_with_config(
     let local_manifest = Manifest::sign(body, identity)?;
 
     let (commands, receiver) = mpsc::channel(32);
-    let task = tokio::spawn(run_node(swarm, local_manifest.clone(), receiver, config));
+    let task = tokio::spawn(run_node(
+        swarm,
+        local_manifest.clone(),
+        identity.clone(),
+        receiver,
+        config,
+        port_mapping_rx,
+    ));
 
     let handle = NodeHandle {
         peer_id,
@@ -783,21 +933,48 @@ async fn wait_for_listen(swarm: &mut Swarm<Behaviour>) -> Result<Multiaddr> {
     }
 }
 
+async fn wait_for_connection(swarm: &mut Swarm<Behaviour>, peer: PeerId) -> Result<()> {
+    loop {
+        match swarm.select_next_some().await {
+            SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == peer => return Ok(()),
+            SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(failed),
+                error,
+                ..
+            } if failed == peer => return Err(Error::Dial(error.to_string())),
+            _ => {}
+        }
+    }
+}
+
 async fn run_node(
     mut swarm: Swarm<Behaviour>,
-    local_manifest: Manifest,
+    mut local_manifest: Manifest,
+    identity: Identity,
     mut commands: mpsc::Receiver<Command>,
     config: NodeConfig,
+    mut port_mapping_rx: Option<mpsc::Receiver<SocketAddrV4>>,
 ) {
     let mut state = NodeState {
         connectivity_policy: config.connectivity_policy,
+        port_mapping: config.port_mapping,
+        relay_enabled: config.relay.is_some(),
+        relay_server: config.relay_server,
+        relay_reservation: config.relay.as_ref().and_then(peer_from_multiaddr),
         ..Default::default()
     };
 
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_event(&mut swarm, event, &local_manifest, &mut state, config);
+                handle_event(
+                    &mut swarm,
+                    event,
+                    &mut local_manifest,
+                    &identity,
+                    &mut state,
+                    &config,
+                );
             }
             command = commands.recv() => {
                 match command {
@@ -809,6 +986,26 @@ async fn run_node(
                     None => break,
                 }
             }
+            port_mapping = async {
+                match port_mapping_rx.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => std::future::pending::<Option<SocketAddrV4>>().await,
+                }
+            } => {
+                if let Some(socket) = port_mapping {
+                    if let Ok(mut address) = format!("/ip4/{}/tcp/{}", socket.ip(), socket.port())
+                        .parse::<Multiaddr>()
+                    {
+                        address.push(Protocol::P2p(*swarm.local_peer_id()));
+                        swarm.add_external_address(address.clone());
+                        state
+                            .address_book
+                            .upsert(endpoint_record(&address, "port_mapping", false));
+                        state.external_endpoint = Some(address.to_string());
+                        add_manifest_endpoint(&mut local_manifest, &identity, &address);
+                    }
+                }
+            }
         }
     }
 }
@@ -816,9 +1013,10 @@ async fn run_node(
 fn handle_event(
     swarm: &mut Swarm<Behaviour>,
     event: SwarmEvent<BehaviourEvent>,
-    local_manifest: &Manifest,
+    local_manifest: &mut Manifest,
+    identity: &Identity,
     state: &mut NodeState,
-    config: NodeConfig,
+    config: &NodeConfig,
 ) {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -850,13 +1048,66 @@ fn handle_event(
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             state.manifests.remove(&peer_id);
         }
+        SwarmEvent::NewListenAddr { address, .. } => {
+            let address = ensure_peer_id(address, *swarm.local_peer_id());
+            state
+                .address_book
+                .upsert(endpoint_record(&address, "listen", false));
+            add_manifest_endpoint(local_manifest, identity, &address);
+        }
+        SwarmEvent::ExternalAddrConfirmed { address } => {
+            state
+                .address_book
+                .upsert(endpoint_record(&address, "external", false));
+            add_manifest_endpoint(local_manifest, identity, &address);
+        }
         SwarmEvent::Behaviour(event) => match event {
             BehaviourEvent::Rpc(event) => {
                 handle_rpc_event(swarm, event, local_manifest, state, config)
             }
             BehaviourEvent::Kad(event) => handle_kad_event(event, state),
+            BehaviourEvent::Autonat(event) => {
+                if let libp2p::autonat::Event::StatusChanged { new, .. } = event {
+                    state.autonat_reachability = match new {
+                        NatStatus::Public(_) => Some(Reachability::PublicVerified),
+                        NatStatus::Private => Some(Reachability::Private),
+                        NatStatus::Unknown => None,
+                    };
+                }
+            }
+            BehaviourEvent::Dcutr(_) => {}
+            BehaviourEvent::RelayClient(event) => {
+                if let libp2p::relay::client::Event::ReservationReqAccepted {
+                    relay_peer_id, ..
+                } = event
+                {
+                    state.relay_reservation = Some(relay_peer_id);
+                }
+            }
+            BehaviourEvent::RelayServer(_) => {}
         },
         _ => {}
+    }
+}
+
+fn add_manifest_endpoint(manifest: &mut Manifest, identity: &Identity, address: &Multiaddr) {
+    let value = address.to_string();
+    if manifest
+        .body
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint == &value)
+    {
+        return;
+    }
+
+    let mut body = manifest.body.clone();
+    body.endpoints.push(value);
+    body.seq = body.seq.saturating_add(1);
+    body.issued_at = now_unix();
+    body.expires_at = body.issued_at.saturating_add(MANIFEST_TTL_SECONDS);
+    if let Ok(signed) = Manifest::sign(body, identity) {
+        *manifest = signed;
     }
 }
 
@@ -865,7 +1116,7 @@ fn handle_rpc_event(
     event: request_response::Event<RpcRequest, RpcResponse>,
     local_manifest: &Manifest,
     state: &mut NodeState,
-    config: NodeConfig,
+    config: &NodeConfig,
 ) {
     match event {
         request_response::Event::Message { peer, message, .. } => match message {
@@ -914,7 +1165,11 @@ fn handle_task_start(
     local_manifest: &Manifest,
     state: &mut NodeState,
 ) -> RpcResponse {
-    if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+    if let Err(error) = ensure_operation_allowed(
+        state.connectivity_policy,
+        state.relay_enabled,
+        state.relay_server,
+    ) {
         return task_error(error.to_string());
     }
     if !state.manifests.contains_key(&peer) {
@@ -1091,7 +1346,7 @@ fn respond_to_request(
     channel: ResponseChannel<RpcResponse>,
     local_manifest: &Manifest,
     state: &mut NodeState,
-    config: NodeConfig,
+    config: &NodeConfig,
 ) {
     let response = match request {
         RpcRequest::Manifest(manifest) => match verify_manifest_for_peer(&manifest, &peer) {
@@ -1277,15 +1532,51 @@ fn handle_response(
     }
 }
 
-fn ensure_direct_allowed(policy: ConnectivityPolicy) -> Result<()> {
+fn ensure_operation_allowed(
+    policy: ConnectivityPolicy,
+    relay_enabled: bool,
+    relay_server: bool,
+) -> Result<()> {
     match policy {
         ConnectivityPolicy::Auto | ConnectivityPolicy::Direct => Ok(()),
+        ConnectivityPolicy::Relay if relay_enabled || relay_server => Ok(()),
         ConnectivityPolicy::Relay => Err(Error::Unsupported(
-            "relay transport is not implemented; direct dial is disabled by policy".to_owned(),
+            "relay policy requires --relay or --relay-server".to_owned(),
         )),
         ConnectivityPolicy::Privacy => Err(Error::Unsupported(
-            "Tor/I2P transport is not implemented; direct dial is disabled by policy".to_owned(),
+            "Tor/I2P transports are not implemented; clearnet operations are disabled".to_owned(),
         )),
+    }
+}
+
+fn ensure_dial_allowed(
+    policy: ConnectivityPolicy,
+    relay_enabled: bool,
+    relay_server: bool,
+    addr: &Multiaddr,
+) -> Result<()> {
+    match policy {
+        ConnectivityPolicy::Auto => Ok(()),
+        ConnectivityPolicy::Direct => {
+            if is_relayed(addr) {
+                Err(Error::Unsupported(
+                    "direct policy does not allow /p2p-circuit addresses".to_owned(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        ConnectivityPolicy::Relay => {
+            if !is_relayed(addr) {
+                return Err(Error::Unsupported(
+                    "relay policy requires a /p2p-circuit address".to_owned(),
+                ));
+            }
+            ensure_operation_allowed(policy, relay_enabled, relay_server)
+        }
+        ConnectivityPolicy::Privacy => {
+            ensure_operation_allowed(policy, relay_enabled, relay_server)
+        }
     }
 }
 
@@ -1324,17 +1615,45 @@ fn classify_ipv6(ip: Ipv6Addr) -> Reachability {
     }
 }
 
+fn ensure_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
+    if peer_from_multiaddr(&address) == Some(peer_id) {
+        address
+    } else {
+        address.with(Protocol::P2p(peer_id))
+    }
+}
+
+fn is_relayed(addr: &Multiaddr) -> bool {
+    addr.iter().any(|protocol| protocol == Protocol::P2pCircuit)
+}
+
+fn tcp_port(addr: &Multiaddr) -> Option<NonZeroU16> {
+    addr.iter().find_map(|protocol| match protocol {
+        Protocol::Tcp(port) => NonZeroU16::new(port),
+        _ => None,
+    })
+}
+
 fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRecord {
+    let relayed = is_relayed(addr);
     EndpointRecord {
         addr: addr.to_string(),
-        transport: TransportKind::Tcp,
-        reachability: classify_multiaddr(addr),
+        transport: if relayed {
+            TransportKind::Relay
+        } else {
+            TransportKind::Tcp
+        },
+        reachability: if relayed {
+            Reachability::Relay
+        } else {
+            classify_multiaddr(addr)
+        },
         source: source.to_owned(),
         verified,
     }
 }
 
-fn transport_statuses() -> Vec<TransportStatus> {
+fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
     vec![
         TransportStatus {
             transport: TransportKind::Tcp,
@@ -1343,8 +1662,23 @@ fn transport_statuses() -> Vec<TransportStatus> {
         },
         TransportStatus {
             transport: TransportKind::Relay,
-            available: false,
-            note: "planned for M4b".to_owned(),
+            available: state.relay_enabled || state.relay_server,
+            note: if state.relay_server {
+                "circuit relay v2 server + client".to_owned()
+            } else if state.relay_enabled {
+                "circuit relay v2 client".to_owned()
+            } else {
+                "pass --relay or --relay-server to enable".to_owned()
+            },
+        },
+        TransportStatus {
+            transport: TransportKind::PortMapping,
+            available: state.port_mapping,
+            note: if state.port_mapping {
+                "UPnP/NAT-PMP/PCP requested".to_owned()
+            } else {
+                "pass --port-mapping to enable".to_owned()
+            },
         },
         TransportStatus {
             transport: TransportKind::Tor,
@@ -1385,9 +1719,12 @@ fn build_network_status(
         peer_id: peer_id.to_string(),
         listen,
         policy: state.connectivity_policy,
-        reachability,
-        transports: transport_statuses(),
+        reachability: state.autonat_reachability.unwrap_or(reachability),
+        transports: transport_statuses(state),
         endpoints,
+        external_endpoint: state.external_endpoint.clone(),
+        port_mapping: state.port_mapping,
+        relay_reservation: state.relay_reservation.map(|peer| peer.to_string()),
     }
 }
 
@@ -1399,7 +1736,12 @@ fn handle_command(
 ) -> bool {
     match command {
         Command::Dial { addr, reply } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_dial_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+                &addr,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1437,7 +1779,11 @@ fn handle_command(
             true
         }
         Command::Manifest { peer, reply } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_operation_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1453,7 +1799,11 @@ fn handle_command(
             message,
             reply,
         } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_operation_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1471,7 +1821,11 @@ fn handle_command(
             nonce,
             reply,
         } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_operation_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1582,7 +1936,11 @@ fn handle_command(
             true
         }
         Command::DialPeer { peer, reply } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_operation_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1607,7 +1965,11 @@ fn handle_command(
             deadline_at,
             reply,
         } => {
-            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+            if let Err(error) = ensure_operation_allowed(
+                state.connectivity_policy,
+                state.relay_enabled,
+                state.relay_server,
+            ) {
                 let _ = reply.send(Err(error));
                 return true;
             }
@@ -1858,10 +2220,13 @@ fn peer_id_for_agent_id(agent_id: &AgentId) -> Result<PeerId> {
 }
 
 fn peer_from_multiaddr(address: &Multiaddr) -> Option<PeerId> {
-    address.iter().find_map(|protocol| match protocol {
-        Protocol::P2p(peer) => Some(peer),
-        _ => None,
-    })
+    address
+        .iter()
+        .filter_map(|protocol| match protocol {
+            Protocol::P2p(peer) => Some(peer),
+            _ => None,
+        })
+        .last()
 }
 
 #[cfg(test)]
@@ -1969,10 +2334,11 @@ mod tests {
 
     #[test]
     fn privacy_and_relay_policies_fail_closed() {
-        assert!(ensure_direct_allowed(ConnectivityPolicy::Auto).is_ok());
-        assert!(ensure_direct_allowed(ConnectivityPolicy::Direct).is_ok());
-        assert!(ensure_direct_allowed(ConnectivityPolicy::Relay).is_err());
-        assert!(ensure_direct_allowed(ConnectivityPolicy::Privacy).is_err());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Auto, false, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Direct, false, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, false, false).is_err());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, true, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Privacy, true, true).is_err());
     }
 
     #[test]

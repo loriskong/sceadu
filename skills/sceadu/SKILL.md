@@ -40,6 +40,12 @@ sceadu serve --connectivity privacy \
   --tor-proxy 127.0.0.1:9050 \
   --onion /onion3/<onion-address>:4001
 
+# I2P privacy mode: loopback listener + external I2P server tunnel + SOCKS5 proxy
+sceadu serve --connectivity privacy \
+  --listen /ip4/127.0.0.1/tcp/4001 \
+  --i2p-proxy 127.0.0.1:4447 \
+  --i2p-address /dns4/<b32>.b32.i2p/tcp/80
+
 # Discovery
 sceadu discover --addr <introducer-address> --capability task.echo
 
@@ -70,13 +76,15 @@ and known endpoints.
 - `direct`: only direct TCP. Relayed `/p2p-circuit` addresses are rejected.
 - `relay`: require a relay path. Pass `--relay` for a relay client or
   `--relay-server` for a relay server; otherwise it fails closed.
-- `privacy`: route through Tor. Requires `--tor-proxy`; an inbound node also
-  needs a loopback listener and an external onion service advertised with
-  `--onion`. Clearnet listeners are rejected. I2P is not implemented yet.
+- `privacy`: route through Tor or I2P. Requires `--tor-proxy` or
+  `--i2p-proxy`; an inbound node also needs a loopback listener plus an external
+  onion service (`--onion`) or I2P server tunnel (`--i2p-address`). Clearnet
+  listeners are rejected.
 
-Relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP, and Tor onion dialing are implemented.
-I2P, QUIC, and public bootstrap/relay infrastructure remain. Do not claim a
-transport is available from the policy name alone; read `net status`.
+Relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP, Tor onion dialing, and I2P `.i2p`
+dialing are implemented. QUIC and public bootstrap/relay infrastructure remain.
+Do not claim a transport is available from the policy name alone; read
+`net status`.
 
 Tor inbound requires an external Tor daemon:
 
@@ -85,8 +93,9 @@ HiddenServiceDir /var/lib/tor/sceadu/
 HiddenServicePort 4001 127.0.0.1:4001
 ```
 
-Sceadu only dials `.onion` through the SOCKS5 proxy; it does not run Tor itself.
-`privacy` never falls back to a clearnet address.
+I2P inbound requires an I2P server tunnel mapped to the same loopback port.
+Sceadu only dials `.onion` and `.i2p` through a SOCKS5 proxy; it does not run Tor
+or I2P itself. `privacy` never falls back to a clearnet address.
 
 A relayed address looks like:
 

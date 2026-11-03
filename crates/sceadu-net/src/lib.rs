@@ -35,8 +35,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+pub mod i2p;
 pub mod invite;
 pub mod tor;
+pub use i2p::I2pTransport;
 pub use invite::InviteTicket;
 pub use tor::TorTransport;
 
@@ -298,6 +300,10 @@ pub struct NodeConfig {
     pub tor_proxy: Option<SocketAddr>,
     /// External onion endpoint advertised by this node.
     pub onion: Option<Multiaddr>,
+    /// SOCKS5 proxy used for I2P dialing.
+    pub i2p_proxy: Option<SocketAddr>,
+    /// External I2P endpoint advertised by this node.
+    pub i2p_address: Option<Multiaddr>,
 }
 
 /// One event in a remote task stream.
@@ -399,6 +405,7 @@ struct NodeState {
     relay_enabled: bool,
     relay_server: bool,
     tor_enabled: bool,
+    i2p_enabled: bool,
     external_endpoint: Option<String>,
     autonat_reachability: Option<Reachability>,
     relay_reservation: Option<PeerId>,
@@ -733,9 +740,9 @@ pub async fn spawn_with_config(
 ) -> Result<(NodeHandle, Option<Multiaddr>)> {
     match config.connectivity_policy {
         ConnectivityPolicy::Privacy => {
-            if config.tor_proxy.is_none() {
+            if config.tor_proxy.is_none() && config.i2p_proxy.is_none() {
                 return Err(Error::Unsupported(
-                    "privacy policy requires --tor-proxy".to_owned(),
+                    "privacy policy requires --tor-proxy or --i2p-proxy".to_owned(),
                 ));
             }
             if let Some(onion) = &config.onion {
@@ -744,17 +751,34 @@ pub async fn spawn_with_config(
                         "--onion must be an /onion3/... address".to_owned(),
                     ));
                 }
+                if config.tor_proxy.is_none() {
+                    return Err(Error::Unsupported(
+                        "--onion requires --tor-proxy".to_owned(),
+                    ));
+                }
+            }
+            if let Some(i2p) = &config.i2p_address {
+                if !is_i2p(i2p) {
+                    return Err(Error::Unsupported(
+                        "--i2p-address must be a .i2p DNS address".to_owned(),
+                    ));
+                }
+                if config.i2p_proxy.is_none() {
+                    return Err(Error::Unsupported(
+                        "--i2p-address requires --i2p-proxy".to_owned(),
+                    ));
+                }
             }
             if let Some(listen) = &listen {
                 if classify_multiaddr(listen) != Reachability::Loopback {
                     return Err(Error::Unsupported(
-                        "privacy listener must be loopback; publish an onion service to it"
+                        "privacy listener must be loopback; publish a Tor/I2P service to it"
                             .to_owned(),
                     ));
                 }
-                if config.onion.is_none() {
+                if config.onion.is_none() && config.i2p_address.is_none() {
                     return Err(Error::Unsupported(
-                        "privacy listener requires --onion".to_owned(),
+                        "privacy listener requires --onion or --i2p-address".to_owned(),
                     ));
                 }
             }
@@ -789,6 +813,14 @@ pub async fn spawn_with_config(
     let keypair = Keypair::ed25519_from_bytes(&mut seed.expose()[..])
         .map_err(|error| Error::Identity(error.to_string()))?;
     let peer_id = keypair.public().to_peer_id();
+    let onion = config
+        .onion
+        .as_ref()
+        .map(|address| ensure_peer_id(address.clone(), peer_id));
+    let i2p = config
+        .i2p_address
+        .as_ref()
+        .map(|address| ensure_peer_id(address.clone(), peer_id));
 
     let relay_server = if config.relay_server {
         let mut behaviour =
@@ -800,6 +832,7 @@ pub async fn spawn_with_config(
     };
 
     let tor_proxy = config.tor_proxy;
+    let i2p_proxy = config.i2p_proxy;
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_tcp(
@@ -812,6 +845,7 @@ pub async fn spawn_with_config(
             let noise =
                 libp2p::noise::Config::new(key).expect("generated ed25519 key is valid for Noise");
             crate::tor::TorTransport::new(tor_proxy)
+                .or_transport(crate::i2p::I2pTransport::new(i2p_proxy))
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise)
                 .multiplex(libp2p::yamux::Config::default())
@@ -893,8 +927,11 @@ pub async fn spawn_with_config(
             swarm.add_external_address(address.clone());
         }
     }
-    if let Some(onion) = &config.onion {
+    if let Some(onion) = &onion {
         swarm.add_external_address(onion.clone());
+    }
+    if let Some(i2p) = &i2p {
+        swarm.add_external_address(i2p.clone());
     }
 
     let port_mapping_rx = if config.port_mapping {
@@ -934,13 +971,16 @@ pub async fn spawn_with_config(
     let mut body = ManifestBody::new(identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
     body.capabilities.push(Capability::new("task.echo"));
     if config.connectivity_policy == ConnectivityPolicy::Privacy {
-        if let Some(onion) = &config.onion {
+        if let Some(onion) = &onion {
             body.endpoints.push(onion.to_string());
+        }
+        if let Some(i2p) = &i2p {
+            body.endpoints.push(i2p.to_string());
         }
     } else if let Some(address) = &listen_addr {
         body.endpoints.push(address.to_string());
     }
-    if let Some(onion) = &config.onion {
+    if let Some(onion) = &onion {
         if !body
             .endpoints
             .iter()
@@ -949,8 +989,23 @@ pub async fn spawn_with_config(
             body.endpoints.push(onion.to_string());
         }
     }
+    if let Some(i2p) = &i2p {
+        if !body
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint == &i2p.to_string())
+        {
+            body.endpoints.push(i2p.to_string());
+        }
+    }
     body.protocols.push(PROTOCOL.to_owned());
     let local_manifest = Manifest::sign(body, identity)?;
+
+    let advertised_addr = if config.connectivity_policy == ConnectivityPolicy::Privacy {
+        onion.clone().or_else(|| i2p.clone())
+    } else {
+        listen_addr.clone()
+    };
 
     let (commands, receiver) = mpsc::channel(32);
     let task = tokio::spawn(run_node(
@@ -961,10 +1016,9 @@ pub async fn spawn_with_config(
         config,
         port_mapping_rx,
     ));
-
     let handle = NodeHandle {
         peer_id,
-        listen_addr: listen_addr.clone(),
+        listen_addr: advertised_addr,
         agent_id: local_manifest.body.agent_id.clone(),
         commands,
         task,
@@ -1016,6 +1070,7 @@ async fn run_node(
         relay_enabled: config.relay.is_some(),
         relay_server: config.relay_server,
         tor_enabled: config.tor_proxy.is_some(),
+        i2p_enabled: config.i2p_proxy.is_some(),
         relay_reservation: config.relay.as_ref().and_then(peer_from_multiaddr),
         ..Default::default()
     };
@@ -1230,6 +1285,7 @@ fn handle_task_start(
         state.relay_enabled,
         state.relay_server,
         state.tor_enabled,
+        state.i2p_enabled,
     ) {
         return task_error(error.to_string());
     }
@@ -1598,6 +1654,7 @@ fn ensure_operation_allowed(
     relay_enabled: bool,
     relay_server: bool,
     tor_enabled: bool,
+    i2p_enabled: bool,
 ) -> Result<()> {
     match policy {
         ConnectivityPolicy::Auto | ConnectivityPolicy::Direct => Ok(()),
@@ -1605,9 +1662,9 @@ fn ensure_operation_allowed(
         ConnectivityPolicy::Relay => Err(Error::Unsupported(
             "relay policy requires --relay or --relay-server".to_owned(),
         )),
-        ConnectivityPolicy::Privacy if tor_enabled => Ok(()),
+        ConnectivityPolicy::Privacy if tor_enabled || i2p_enabled => Ok(()),
         ConnectivityPolicy::Privacy => Err(Error::Unsupported(
-            "privacy policy requires --tor-proxy".to_owned(),
+            "privacy policy requires --tor-proxy or --i2p-proxy".to_owned(),
         )),
     }
 }
@@ -1617,12 +1674,13 @@ fn ensure_dial_allowed(
     relay_enabled: bool,
     relay_server: bool,
     tor_enabled: bool,
+    i2p_enabled: bool,
     addr: &Multiaddr,
 ) -> Result<()> {
     match policy {
         ConnectivityPolicy::Auto => Ok(()),
         ConnectivityPolicy::Direct => {
-            if is_relayed(addr) || is_onion(addr) {
+            if is_relayed(addr) || is_onion(addr) || is_i2p(addr) {
                 Err(Error::Unsupported(
                     "direct policy only allows clearnet TCP addresses".to_owned(),
                 ))
@@ -1636,15 +1694,37 @@ fn ensure_dial_allowed(
                     "relay policy requires a /p2p-circuit address".to_owned(),
                 ));
             }
-            ensure_operation_allowed(policy, relay_enabled, relay_server, tor_enabled)
+            ensure_operation_allowed(
+                policy,
+                relay_enabled,
+                relay_server,
+                tor_enabled,
+                i2p_enabled,
+            )
         }
         ConnectivityPolicy::Privacy => {
-            if !is_onion(addr) {
+            if is_onion(addr) && !tor_enabled {
                 return Err(Error::Unsupported(
-                    "privacy policy requires an /onion3/ address".to_owned(),
+                    "onion address requires --tor-proxy".to_owned(),
                 ));
             }
-            ensure_operation_allowed(policy, relay_enabled, relay_server, tor_enabled)
+            if is_i2p(addr) && !i2p_enabled {
+                return Err(Error::Unsupported(
+                    "I2P address requires --i2p-proxy".to_owned(),
+                ));
+            }
+            if !is_onion(addr) && !is_i2p(addr) {
+                return Err(Error::Unsupported(
+                    "privacy policy requires an /onion3/ or .i2p address".to_owned(),
+                ));
+            }
+            ensure_operation_allowed(
+                policy,
+                relay_enabled,
+                relay_server,
+                tor_enabled,
+                i2p_enabled,
+            )
         }
     }
 }
@@ -1663,6 +1743,11 @@ fn classify_multiaddr(addr: &Multiaddr) -> Reachability {
             Protocol::Ip4(ip) => return classify_ipv4(ip),
             Protocol::Ip6(ip) => return classify_ipv6(ip),
             Protocol::Onion3(_) => return Reachability::Tor,
+            Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host)
+                if host.ends_with(".i2p") =>
+            {
+                return Reachability::I2P;
+            }
             _ => {}
         }
     }
@@ -1698,6 +1783,13 @@ fn is_onion(addr: &Multiaddr) -> bool {
         .any(|protocol| matches!(protocol, Protocol::Onion3(_)))
 }
 
+fn is_i2p(addr: &Multiaddr) -> bool {
+    addr.iter().any(|protocol| match protocol {
+        Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host) => host.ends_with(".i2p"),
+        _ => false,
+    })
+}
+
 fn is_relayed(addr: &Multiaddr) -> bool {
     addr.iter().any(|protocol| protocol == Protocol::P2pCircuit)
 }
@@ -1712,12 +1804,15 @@ fn tcp_port(addr: &Multiaddr) -> Option<NonZeroU16> {
 fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRecord {
     let relayed = is_relayed(addr);
     let onion = is_onion(addr);
+    let i2p = is_i2p(addr);
     EndpointRecord {
         addr: addr.to_string(),
         transport: if relayed {
             TransportKind::Relay
         } else if onion {
             TransportKind::Tor
+        } else if i2p {
+            TransportKind::I2P
         } else {
             TransportKind::Tcp
         },
@@ -1725,6 +1820,8 @@ fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRe
             Reachability::Relay
         } else if onion {
             Reachability::Tor
+        } else if i2p {
+            Reachability::I2P
         } else {
             classify_multiaddr(addr)
         },
@@ -1771,8 +1868,12 @@ fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
         },
         TransportStatus {
             transport: TransportKind::I2P,
-            available: false,
-            note: "planned for M4c".to_owned(),
+            available: state.i2p_enabled,
+            note: if state.i2p_enabled {
+                "SOCKS5 I2P dialing".to_owned()
+            } else {
+                "pass --i2p-proxy to enable".to_owned()
+            },
         },
     ]
 }
@@ -1825,6 +1926,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
                 &addr,
             ) {
                 let _ = reply.send(Err(error));
@@ -1869,6 +1971,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -1890,6 +1993,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -1913,6 +2017,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2029,6 +2134,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2059,6 +2165,7 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
+                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2424,12 +2531,32 @@ mod tests {
 
     #[test]
     fn privacy_and_relay_policies_fail_closed() {
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Auto, false, false, false).is_ok());
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Direct, false, false, false).is_ok());
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, false, false, false).is_err());
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, true, false, false).is_ok());
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Privacy, true, true, false).is_err());
-        assert!(ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, true).is_ok());
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Auto, false, false, false, false).is_ok()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Direct, false, false, false, false)
+                .is_ok()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Relay, false, false, false, false)
+                .is_err()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Relay, true, false, false, false).is_ok()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Privacy, true, true, false, false)
+                .is_err()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, true, false)
+                .is_ok()
+        );
+        assert!(
+            ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, false, true)
+                .is_ok()
+        );
     }
 
     #[test]

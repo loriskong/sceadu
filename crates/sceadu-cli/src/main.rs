@@ -56,6 +56,12 @@ enum NetCommand {
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
+        /// SOCKS5 proxy for I2P dialing.
+        #[arg(long)]
+        i2p_proxy: Option<SocketAddr>,
+        /// External I2P endpoint to advertise.
+        #[arg(long)]
+        i2p_address: Option<Multiaddr>,
     },
 }
 
@@ -122,6 +128,12 @@ enum Command {
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
+        /// SOCKS5 proxy for I2P dialing.
+        #[arg(long)]
+        i2p_proxy: Option<SocketAddr>,
+        /// External I2P endpoint to advertise.
+        #[arg(long)]
+        i2p_address: Option<Multiaddr>,
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
@@ -203,6 +215,9 @@ enum Command {
         /// SOCKS5 proxy for Tor onion dialing.
         #[arg(long)]
         tor_proxy: Option<SocketAddr>,
+        /// SOCKS5 proxy for I2P dialing.
+        #[arg(long)]
+        i2p_proxy: Option<SocketAddr>,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -292,6 +307,8 @@ async fn main() -> Result<()> {
             port_mapping,
             tor_proxy,
             onion,
+            i2p_proxy,
+            i2p_address,
             peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
@@ -313,6 +330,8 @@ async fn main() -> Result<()> {
                     port_mapping,
                     tor_proxy,
                     onion: onion.clone(),
+                    i2p_proxy,
+                    i2p_address: i2p_address.clone(),
                 },
             )
             .await?;
@@ -345,6 +364,8 @@ async fn main() -> Result<()> {
                 "relay_server": relay_server,
                 "tor_proxy": tor_proxy.map(|proxy| proxy.to_string()),
                 "onion": onion.as_ref().map(|addr| addr.to_string()),
+                "i2p_proxy": i2p_proxy.map(|proxy| proxy.to_string()),
+                "i2p_address": i2p_address.as_ref().map(|addr| addr.to_string()),
                 "peers": bootstrapped,
                 "note": "press Ctrl-C to stop"
             }))?;
@@ -378,6 +399,8 @@ async fn main() -> Result<()> {
                 port_mapping,
                 tor_proxy,
                 onion,
+                i2p_proxy,
+                i2p_address,
             } => {
                 let identity = load_identity(&cli.path, &cli.passphrase_file)?;
                 let connectivity_policy = parse_connectivity_policy(&connectivity)?;
@@ -401,6 +424,8 @@ async fn main() -> Result<()> {
                         port_mapping,
                         tor_proxy,
                         onion,
+                        i2p_proxy,
+                        i2p_address,
                         ..Default::default()
                     },
                 )
@@ -537,6 +562,7 @@ async fn main() -> Result<()> {
             connectivity,
             relay,
             tor_proxy,
+            i2p_proxy,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
@@ -549,6 +575,7 @@ async fn main() -> Result<()> {
                     connectivity_policy,
                     relay,
                     tor_proxy,
+                    i2p_proxy,
                     ..Default::default()
                 },
             )

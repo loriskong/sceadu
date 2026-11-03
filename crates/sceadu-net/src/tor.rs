@@ -55,13 +55,13 @@ impl Transport for TorTransport {
         addr: Multiaddr,
         _opts: DialOpts,
     ) -> Result<Self::Dial, TransportError<Self::Error>> {
+        let (host, port) = onion_target(&addr)?;
         let proxy = self.proxy.ok_or_else(|| {
             TransportError::Other(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "Tor proxy is not configured",
             ))
         })?;
-        let (host, port) = onion_target(&addr)?;
 
         Ok(Box::pin(async move {
             let stream = Socks5Stream::connect(proxy, (host.as_str(), port))

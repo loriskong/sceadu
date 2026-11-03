@@ -242,7 +242,8 @@ async fn privacy_manifest_advertises_only_the_onion_endpoint() {
     .unwrap();
 
     let status = node.network_status().await.unwrap();
-    assert_eq!(status.listen.as_deref(), Some(onion.to_string().as_str()));
+    let expected = format!("{}/p2p/{}", onion, node.peer_id());
+    assert_eq!(status.listen.as_deref(), Some(expected.as_str()));
     assert_eq!(status.reachability, Reachability::Tor);
 
     node.shutdown().await;
@@ -361,4 +362,108 @@ async fn privacy_tor_transport_dials_through_socks() {
 
     client.shutdown().await;
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn privacy_i2p_transport_dials_through_socks() {
+    use std::net::SocketAddr;
+
+    let server_identity = Identity::generate();
+    let client_identity = Identity::generate();
+    let (server, server_addr) = spawn(&server_identity, Some(listen_addr())).await.unwrap();
+    let server_addr = server_addr.unwrap();
+    let server_peer = server.peer_id();
+
+    let port = server_addr
+        .iter()
+        .find_map(|protocol| match protocol {
+            libp2p::multiaddr::Protocol::Tcp(port) => Some(port),
+            _ => None,
+        })
+        .unwrap();
+    let target = SocketAddr::from(([127, 0, 0, 1], port));
+
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = proxy_listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = proxy_listener.accept().await else {
+                break;
+            };
+            tokio::spawn(handle_socks5(stream, target));
+        }
+    });
+
+    let i2p: Multiaddr = format!("/dns4/example.b32.i2p/tcp/80/p2p/{server_peer}")
+        .parse()
+        .unwrap();
+
+    let (client, _) = spawn_with_config(
+        &client_identity,
+        None,
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            i2p_proxy: Some(proxy_addr),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let peer = client.dial(i2p).await.unwrap();
+    let manifest = client.request_manifest(peer).await.unwrap();
+    assert_eq!(manifest.body.agent_id, server_identity.agent_id());
+
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn privacy_status_reports_i2p_available() {
+    let identity = Identity::generate();
+    let (node, _) = spawn_with_config(
+        &identity,
+        None,
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            i2p_proxy: Some("127.0.0.1:4447".parse().unwrap()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let status = node.network_status().await.unwrap();
+    assert!(status
+        .transports
+        .iter()
+        .any(|transport| transport.transport == TransportKind::I2P && transport.available));
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn privacy_manifest_advertises_only_the_i2p_endpoint() {
+    let identity = Identity::generate();
+    let i2p: Multiaddr = "/dns4/example.b32.i2p/tcp/80".parse().unwrap();
+
+    let (node, _) = spawn_with_config(
+        &identity,
+        Some(listen_addr()),
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            i2p_proxy: Some("127.0.0.1:4447".parse().unwrap()),
+            i2p_address: Some(i2p.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let status = node.network_status().await.unwrap();
+    let expected = format!("{}/p2p/{}", i2p, node.peer_id());
+    assert_eq!(status.listen.as_deref(), Some(expected.as_str()));
+    assert_eq!(status.reachability, Reachability::I2P);
+
+    node.shutdown().await;
 }

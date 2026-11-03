@@ -8,8 +8,8 @@ use rpassword::prompt_password;
 use sceadu_core::keystore;
 use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
 use sceadu_net::{
-    spawn as spawn_node, spawn_with_config, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig,
-    TaskEventKind,
+    spawn as spawn_node, spawn_with_config, ConnectivityPolicy, InviteTicket, Multiaddr,
+    NeighborPolicy, NodeConfig, TaskEventKind,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -28,6 +28,19 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum NetCommand {
+    /// Print local connectivity status.
+    Status {
+        /// Listen multiaddr used for the status node.
+        #[arg(long, default_value = "/ip4/127.0.0.1/tcp/0")]
+        listen: Multiaddr,
+        /// Connectivity policy to report.
+        #[arg(long, default_value = "auto")]
+        connectivity: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,9 +88,17 @@ enum Command {
         /// Neighbor query policy: open or stealth.
         #[arg(long, default_value = "open")]
         neighbor_policy: String,
+        /// Connectivity policy: auto, direct, relay, or privacy.
+        #[arg(long, default_value = "auto")]
+        connectivity: String,
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
+    },
+    /// Inspect local connectivity policy and transports.
+    Net {
+        #[command(subcommand)]
+        command: NetCommand,
     },
     /// Dial a node, exchange manifests, and send an echo request.
     Echo {
@@ -142,6 +163,9 @@ enum Command {
         /// Task timeout in seconds.
         #[arg(long, default_value_t = 30)]
         timeout: u64,
+        /// Connectivity policy: auto, direct, relay, or privacy.
+        #[arg(long, default_value = "auto")]
+        connectivity: String,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -225,15 +249,18 @@ async fn main() -> Result<()> {
         Command::Serve {
             listen,
             neighbor_policy,
+            connectivity,
             peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             let policy = parse_neighbor_policy(&neighbor_policy)?;
+            let connectivity_policy = parse_connectivity_policy(&connectivity)?;
             let (node, address) = spawn_with_config(
                 &identity,
                 Some(listen),
                 NodeConfig {
                     neighbor_policy: policy,
+                    connectivity_policy,
                 },
             )
             .await?;
@@ -261,6 +288,7 @@ async fn main() -> Result<()> {
                 "listen": address.to_string(),
                 "capabilities": ["task.echo"],
                 "neighbor_policy": policy.as_str(),
+                "connectivity_policy": connectivity_policy.as_str(),
                 "peers": bootstrapped,
                 "note": "press Ctrl-C to stop"
             }))?;
@@ -285,6 +313,35 @@ async fn main() -> Result<()> {
 
             node.shutdown().await;
         }
+        Command::Net { command } => match command {
+            NetCommand::Status {
+                listen,
+                connectivity,
+            } => {
+                let identity = load_identity(&cli.path, &cli.passphrase_file)?;
+                let connectivity_policy = parse_connectivity_policy(&connectivity)?;
+                let listen = if matches!(
+                    connectivity_policy,
+                    ConnectivityPolicy::Auto | ConnectivityPolicy::Direct
+                ) {
+                    Some(listen)
+                } else {
+                    None
+                };
+                let (node, _) = spawn_with_config(
+                    &identity,
+                    listen,
+                    NodeConfig {
+                        connectivity_policy,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                let status = node.network_status().await?;
+                print_json(&status)?;
+                node.shutdown().await;
+            }
+        },
         Command::Skill { command } => match command {
             SkillCommand::Install { dir, force } => {
                 let dir = skill_dir(dir)?;
@@ -409,11 +466,21 @@ async fn main() -> Result<()> {
             capability,
             input,
             timeout,
+            connectivity,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
+            let connectivity_policy = parse_connectivity_policy(&connectivity)?;
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
-            let (node, _) = spawn_node(&identity, None).await?;
+            let (node, _) = spawn_with_config(
+                &identity,
+                None,
+                NodeConfig {
+                    connectivity_policy,
+                    ..Default::default()
+                },
+            )
+            .await?;
             let peer = node.dial(addr).await?;
             let _ = node.request_manifest(peer).await?;
             let mut handle = node
@@ -522,6 +589,16 @@ fn skill_dir(dir: Option<PathBuf>) -> Result<PathBuf> {
     match dir {
         Some(dir) => Ok(dir),
         None => default_skill_dir(),
+    }
+}
+
+fn parse_connectivity_policy(value: &str) -> Result<ConnectivityPolicy> {
+    match value {
+        "auto" => Ok(ConnectivityPolicy::Auto),
+        "direct" => Ok(ConnectivityPolicy::Direct),
+        "relay" => Ok(ConnectivityPolicy::Relay),
+        "privacy" => Ok(ConnectivityPolicy::Privacy),
+        _ => bail!("connectivity must be 'auto', 'direct', 'relay', or 'privacy'"),
     }
 }
 

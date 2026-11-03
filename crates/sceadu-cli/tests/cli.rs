@@ -149,3 +149,23 @@ fn skill_install_writes_and_protects_skill() {
         .unwrap();
     assert!(third.status.success());
 }
+
+#[test]
+fn net_status_reports_tcp_transport() {
+    let directory = TempDir::new().unwrap();
+    let init = run_json(&directory, "correct horse battery staple", &["init"]);
+    assert!(init.status.success());
+
+    let status = run_json(
+        &directory,
+        "correct horse battery staple",
+        &["net", "status"],
+    );
+    let status_json = parse_json(&status);
+    assert_eq!(status_json["policy"], "auto");
+    assert!(status_json["transports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|transport| transport["transport"] == "tcp" && transport["available"] == true));
+}

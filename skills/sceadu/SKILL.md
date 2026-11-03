@@ -17,10 +17,15 @@ sceadu id
 sceadu manifest --capability task.echo
 sceadu verify manifest.json
 
+# Inspect local connectivity facts before choosing a path
+sceadu net status
+sceadu net status --connectivity privacy
+
 # Serve local capabilities and connect to known peers
 sceadu serve --listen /ip4/127.0.0.1/tcp/0
 sceadu serve --listen /ip4/127.0.0.1/tcp/0 --peer <seed-address>
 sceadu serve --neighbor-policy stealth
+sceadu serve --connectivity direct
 
 # Discovery
 sceadu discover --addr <introducer-address> --capability task.echo
@@ -35,10 +40,28 @@ sceadu lookup --peer <dht-peer-address> <agent-id>
 
 # Task invocation: one JSON event per line
 sceadu ask --addr <peer-address> --capability task.echo --input '{"text":"hello"}' --timeout 30
+sceadu ask --addr <peer-address> --capability task.echo --connectivity direct
 ```
 
 All commands that report data print JSON. `ask` prints JSON Lines: `started`,
 `progress`, `result`, `failed`, and `done` events in sequence order.
+
+## Connectivity policy
+
+Run `sceadu net status` before selecting a policy. The status reports the
+policy, local reachability (`loopback`, `private`, `public_unverified`,
+`public_verified`, `relay`, `tor`, `i2p`, or `unknown`), available transports,
+and known endpoints.
+
+- `auto`: use the best available path. Currently this means direct TCP.
+- `direct`: only direct TCP. Fail rather than silently using another path.
+- `relay`: require a relay path. Not implemented yet; fails closed.
+- `privacy`: require Tor or I2P. Not implemented yet; fails closed and refuses a
+  cleartext listener.
+
+Do not claim a transport is available from the policy name alone; read
+`net status`. NAT traversal, UPnP/NAT-PMP/PCP, relay, Tor, and I2P are planned
+for M4b/M4c and are reported as unavailable until implemented.
 
 ## Agent workflow
 

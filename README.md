@@ -2,7 +2,7 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M3 complete, MCP deferred).** M1 and M2 are complete. M3 adds a streaming task protocol, CLI `ask`, and `skill install`. The MCP bridge is intentionally deferred; the CLI JSON interface is the agent interface for now. Networking is currently direct TCP + Noise with manual seeds; NAT traversal, relay, public bootstrap, and QUIC are not implemented.
+> **Status: pre-alpha (M4a connectivity foundation).** M1, M2, and M3 are complete. M4a adds a connectivity policy, a reachability/address model, `sceadu net status`, and fail-closed privacy/relay behavior. Actual NAT traversal, UPnP/NAT-PMP/PCP, relay, Tor, and I2P transports are the next M4b/M4c steps. The MCP bridge remains deferred.
 
 ## What it does
 
@@ -22,6 +22,7 @@ Sceadu CLI
     |-- task protocol: manifests, TaskStart/TaskReady, streaming events
     |-- session: Noise-authenticated request/response streams, deadlines
     |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
+    |-- connectivity: policy + address book + reachability status
     |-- transport: TCP + Noise + Yamux (NAT traversal/relay/QUIC planned)
     `-- identity: Ed25519 keys, signed manifests and invites
 ```
@@ -149,6 +150,10 @@ sceadu daemon start
 sceadu status --json
 ```
 
+Connectivity roadmap: M4b adds UPnP/NAT-PMP/PCP and native AutoNAT/DCUtR/relay v2;
+M4c adds optional Tor/I2P transports and strict privacy routing. `net status`
+reports planned transports as unavailable until then.
+
 NAT traversal, circuit relay, public bootstrap nodes, external address advertisement, and QUIC are prerequisites for internet-wide use. They are not part of M3.
 
 ## Discovery
@@ -161,11 +166,31 @@ M2 implements two complementary discovery paths:
 
 `serve --neighbor-policy` controls the responder, and `serve --peer` seeds a node with known peers. `discover` exercises the agent-mediated path from the CLI. Signed invites (`invite`/`join`), source quarantine, and DHT `publish`/`lookup` are implemented. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
 
+## Connectivity
+
+M4a introduces a connectivity policy layer:
+
+- `auto`: use the best available path; currently direct TCP.
+- `direct`: only direct TCP.
+- `relay`: require a relay path; fails closed until relay exists.
+- `privacy`: require Tor or I2P; fails closed and refuses a cleartext listener.
+
+`sceadu net status` reports the policy, local reachability (`loopback`, `private`,
+`public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, `unknown`),
+available transports, and known endpoints. Address records carry transport,
+reachability, source, and verification state. This is the foundation for the
+Bitcoin-style reachable/unreachable address policy; feeler probes and manifest
+endpoint metadata come with the transports.
+
+M4a does not yet implement UPnP/NAT-PMP/PCP, AutoNAT/DCUtR/circuit relay, Tor, or
+I2P. `relay` and `privacy` fail closed by design: no silent downgrade to direct
+TCP, and no cleartext listener under a privacy policy.
+
 ## Public-network readiness
 
 The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records, but it does not relay task traffic.
 
-Two agents behind typical NATs can discover each other through a seed and still fail to open a direct task session. There is no NAT traversal, circuit relay, public bootstrap network, external address advertisement, QUIC transport, or background daemon yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
+Two agents behind typical NATs can discover each other through a seed and still fail to open a direct task session. NAT traversal, circuit relay, public bootstrap, external address advertisement, and QUIC are not implemented yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
 
 ## Tasks
 

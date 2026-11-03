@@ -4,6 +4,7 @@
 //! echo RPC over a libp2p request/response stream.
 
 use std::collections::{HashMap, HashSet};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -70,6 +71,8 @@ pub enum Error {
     Serialization(String),
     #[error("invite error: {0}")]
     Invite(String),
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
     #[error("node task stopped")]
     Closed,
 }
@@ -156,10 +159,118 @@ impl NeighborPolicy {
     }
 }
 
+/// How a node chooses a network path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectivityPolicy {
+    /// Try direct TCP, then future fallbacks.
+    #[default]
+    Auto,
+    /// Use only direct TCP addresses.
+    Direct,
+    /// Require a relay path.
+    Relay,
+    /// Require an anonymizing transport (Tor or I2P).
+    Privacy,
+}
+
+impl ConnectivityPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Direct => "direct",
+            Self::Relay => "relay",
+            Self::Privacy => "privacy",
+        }
+    }
+}
+
+/// Transport names used in status and future manifests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportKind {
+    Tcp,
+    Relay,
+    Tor,
+    #[serde(rename = "i2p")]
+    I2P,
+}
+
+impl TransportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Relay => "relay",
+            Self::Tor => "tor",
+            Self::I2P => "i2p",
+        }
+    }
+}
+
+/// Locally observed reachability classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reachability {
+    Loopback,
+    Private,
+    PublicUnverified,
+    PublicVerified,
+    Relay,
+    Tor,
+    I2P,
+    Unknown,
+}
+
+impl Reachability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Private => "private",
+            Self::PublicUnverified => "public_unverified",
+            Self::PublicVerified => "public_verified",
+            Self::Relay => "relay",
+            Self::Tor => "tor",
+            Self::I2P => "i2p",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One endpoint known to the local address book.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointRecord {
+    pub addr: String,
+    pub transport: TransportKind,
+    pub reachability: Reachability,
+    pub source: String,
+    pub verified: bool,
+}
+
+/// Availability of a transport in this build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportStatus {
+    pub transport: TransportKind,
+    pub available: bool,
+    pub note: String,
+}
+
+/// A snapshot of local connectivity facts for an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStatus {
+    pub agent_id: String,
+    pub peer_id: String,
+    pub listen: Option<String>,
+    pub policy: ConnectivityPolicy,
+    pub reachability: Reachability,
+    pub transports: Vec<TransportStatus>,
+    pub endpoints: Vec<EndpointRecord>,
+}
+
 /// Node behavior configuration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NodeConfig {
     pub neighbor_policy: NeighborPolicy,
+    pub connectivity_policy: ConnectivityPolicy,
 }
 
 /// One event in a remote task stream.
@@ -235,8 +346,28 @@ struct IncomingTask {
 }
 
 #[derive(Default)]
+struct AddressBook {
+    endpoints: HashMap<String, EndpointRecord>,
+}
+
+impl AddressBook {
+    fn upsert(&mut self, record: EndpointRecord) {
+        self.endpoints.insert(record.addr.clone(), record);
+    }
+
+    fn records(&self) -> Vec<EndpointRecord> {
+        let mut records: Vec<EndpointRecord> = self.endpoints.values().cloned().collect();
+        records.sort_by(|left, right| left.addr.cmp(&right.addr));
+        records
+    }
+}
+
+#[derive(Default)]
 struct NodeState {
     sources: HashMap<PeerId, SourceStats>,
+    address_book: AddressBook,
+    pending_dial_endpoints: HashMap<PeerId, String>,
+    connectivity_policy: ConnectivityPolicy,
     pending_asks: HashMap<OutboundRequestId, PendingAsk>,
     active_tasks: HashMap<String, ActiveTask>,
     incoming_tasks: HashMap<String, IncomingTask>,
@@ -316,6 +447,9 @@ enum Command {
     DialPeer {
         peer: PeerId,
         reply: oneshot::Sender<Result<PeerId>>,
+    },
+    Status {
+        reply: oneshot::Sender<NetworkStatus>,
     },
     Ask {
         peer: PeerId,
@@ -500,6 +634,15 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
+    pub async fn network_status(&self) -> Result<NetworkStatus> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::Status { reply })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)
+    }
+
     pub async fn dial_peer(&self, peer: PeerId) -> Result<PeerId> {
         let (reply, receiver) = oneshot::channel();
         self.commands
@@ -554,6 +697,17 @@ pub async fn spawn_with_config(
     listen: Option<Multiaddr>,
     config: NodeConfig,
 ) -> Result<(NodeHandle, Option<Multiaddr>)> {
+    if listen.is_some()
+        && matches!(
+            config.connectivity_policy,
+            ConnectivityPolicy::Relay | ConnectivityPolicy::Privacy
+        )
+    {
+        return Err(Error::Unsupported(
+            "relay/privacy transports are not implemented; disable the cleartext listener"
+                .to_owned(),
+        ));
+    }
     let mut seed = identity.to_seed();
     let keypair = Keypair::ed25519_from_bytes(&mut seed.expose()[..])
         .map_err(|error| Error::Identity(error.to_string()))?;
@@ -635,7 +789,10 @@ async fn run_node(
     mut commands: mpsc::Receiver<Command>,
     config: NodeConfig,
 ) {
-    let mut state = NodeState::default();
+    let mut state = NodeState {
+        connectivity_policy: config.connectivity_policy,
+        ..Default::default()
+    };
 
     loop {
         tokio::select! {
@@ -665,6 +822,15 @@ fn handle_event(
 ) {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            if let Some(addr) = state.pending_dial_endpoints.remove(&peer_id) {
+                if let Some(mut record) = state.address_book.endpoints.get(&addr).cloned() {
+                    record.verified = true;
+                    if record.reachability == Reachability::PublicUnverified {
+                        record.reachability = Reachability::PublicVerified;
+                    }
+                    state.address_book.upsert(record);
+                }
+            }
             if let Some(reply) = state.pending_dials.remove(&peer_id) {
                 let _ = reply.send(Ok(peer_id));
             }
@@ -748,6 +914,9 @@ fn handle_task_start(
     local_manifest: &Manifest,
     state: &mut NodeState,
 ) -> RpcResponse {
+    if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+        return task_error(error.to_string());
+    }
     if !state.manifests.contains_key(&peer) {
         return task_error("manifest exchange required");
     }
@@ -1108,6 +1277,120 @@ fn handle_response(
     }
 }
 
+fn ensure_direct_allowed(policy: ConnectivityPolicy) -> Result<()> {
+    match policy {
+        ConnectivityPolicy::Auto | ConnectivityPolicy::Direct => Ok(()),
+        ConnectivityPolicy::Relay => Err(Error::Unsupported(
+            "relay transport is not implemented; direct dial is disabled by policy".to_owned(),
+        )),
+        ConnectivityPolicy::Privacy => Err(Error::Unsupported(
+            "Tor/I2P transport is not implemented; direct dial is disabled by policy".to_owned(),
+        )),
+    }
+}
+
+fn classify_multiaddr(addr: &Multiaddr) -> Reachability {
+    for protocol in addr.iter() {
+        match protocol {
+            Protocol::Ip4(ip) => return classify_ipv4(ip),
+            Protocol::Ip6(ip) => return classify_ipv6(ip),
+            _ => {}
+        }
+    }
+    Reachability::Unknown
+}
+
+fn classify_ipv4(ip: Ipv4Addr) -> Reachability {
+    if ip.is_loopback() {
+        Reachability::Loopback
+    } else if ip.is_unspecified() {
+        Reachability::Unknown
+    } else if ip.is_private() {
+        Reachability::Private
+    } else {
+        Reachability::PublicUnverified
+    }
+}
+
+fn classify_ipv6(ip: Ipv6Addr) -> Reachability {
+    if ip.is_loopback() {
+        Reachability::Loopback
+    } else if ip.is_unspecified() {
+        Reachability::Unknown
+    } else if ip.is_unique_local() || ip.is_unicast_link_local() {
+        Reachability::Private
+    } else {
+        Reachability::PublicUnverified
+    }
+}
+
+fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRecord {
+    EndpointRecord {
+        addr: addr.to_string(),
+        transport: TransportKind::Tcp,
+        reachability: classify_multiaddr(addr),
+        source: source.to_owned(),
+        verified,
+    }
+}
+
+fn transport_statuses() -> Vec<TransportStatus> {
+    vec![
+        TransportStatus {
+            transport: TransportKind::Tcp,
+            available: true,
+            note: "direct TCP + Noise".to_owned(),
+        },
+        TransportStatus {
+            transport: TransportKind::Relay,
+            available: false,
+            note: "planned for M4b".to_owned(),
+        },
+        TransportStatus {
+            transport: TransportKind::Tor,
+            available: false,
+            note: "planned for M4c".to_owned(),
+        },
+        TransportStatus {
+            transport: TransportKind::I2P,
+            available: false,
+            note: "planned for M4c".to_owned(),
+        },
+    ]
+}
+
+fn build_network_status(
+    peer_id: &PeerId,
+    local_manifest: &Manifest,
+    state: &NodeState,
+) -> NetworkStatus {
+    let listen = local_manifest.body.endpoints.first().cloned();
+    let reachability = listen
+        .as_deref()
+        .and_then(|value| value.parse::<Multiaddr>().ok())
+        .map(|addr| classify_multiaddr(&addr))
+        .unwrap_or(Reachability::Unknown);
+
+    let mut endpoints = state.address_book.records();
+    if let Some(addr) = &listen {
+        if !endpoints.iter().any(|record| &record.addr == addr) {
+            if let Ok(parsed) = addr.parse::<Multiaddr>() {
+                endpoints.push(endpoint_record(&parsed, "listen", false));
+            }
+        }
+    }
+
+    NetworkStatus {
+        agent_id: local_manifest.body.agent_id.to_string(),
+        peer_id: peer_id.to_string(),
+        listen,
+        policy: state.connectivity_policy,
+        reachability,
+        transports: transport_statuses(),
+        endpoints,
+    }
+}
+
 fn handle_command(
     swarm: &mut Swarm<Behaviour>,
     command: Command,
@@ -1116,6 +1399,10 @@ fn handle_command(
 ) -> bool {
     match command {
         Command::Dial { addr, reply } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             let peer = match peer_from_multiaddr(&addr) {
                 Some(peer) => peer,
                 None => {
@@ -1126,13 +1413,21 @@ fn handle_command(
                 }
             };
 
+            let endpoint = endpoint_record(&addr, "dial", false);
             if swarm.is_connected(&peer) {
+                let mut verified = endpoint;
+                verified.verified = true;
+                state.address_book.upsert(verified);
                 let _ = reply.send(Ok(peer));
                 return true;
             }
 
             match swarm.dial(addr) {
                 Ok(()) => {
+                    state
+                        .pending_dial_endpoints
+                        .insert(peer, endpoint.addr.clone());
+                    state.address_book.upsert(endpoint);
                     state.pending_dials.insert(peer, reply);
                 }
                 Err(error) => {
@@ -1142,6 +1437,10 @@ fn handle_command(
             true
         }
         Command::Manifest { peer, reply } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             let request_id = swarm.behaviour_mut().rpc.send_request(
                 &peer,
                 RpcRequest::Manifest(Box::new(local_manifest.clone())),
@@ -1154,6 +1453,10 @@ fn handle_command(
             message,
             reply,
         } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             let request_id = swarm
                 .behaviour_mut()
                 .rpc
@@ -1168,6 +1471,10 @@ fn handle_command(
             nonce,
             reply,
         } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             if source_is_quarantined(state, &peer) {
                 let _ = reply.send(Err(Error::Request("introducer is quarantined".to_owned())));
                 return true;
@@ -1223,6 +1530,9 @@ fn handle_command(
             true
         }
         Command::AddAddress { peer, addr, reply } => {
+            state
+                .address_book
+                .upsert(endpoint_record(&addr, "manual", false));
             let _ = swarm.behaviour_mut().kad.add_address(&peer, addr);
             let _ = reply.send(Ok(()));
             true
@@ -1272,6 +1582,10 @@ fn handle_command(
             true
         }
         Command::DialPeer { peer, reply } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             if swarm.is_connected(&peer) {
                 let _ = reply.send(Ok(peer));
                 return true;
@@ -1293,6 +1607,10 @@ fn handle_command(
             deadline_at,
             reply,
         } => {
+            if let Err(error) = ensure_direct_allowed(state.connectivity_policy) {
+                let _ = reply.send(Err(error));
+                return true;
+            }
             let (events, receiver) = mpsc::channel(32);
             let task_id = new_task_id();
             let request_id = swarm.behaviour_mut().rpc.send_request(
@@ -1313,6 +1631,11 @@ fn handle_command(
                     reply,
                 },
             );
+            true
+        }
+        Command::Status { reply } => {
+            let status = build_network_status(swarm.local_peer_id(), local_manifest, state);
+            let _ = reply.send(status);
             true
         }
         Command::Shutdown => false,
@@ -1622,6 +1945,34 @@ mod tests {
         let filtered = validate_contacts(vec![duplicate.clone(), duplicate], Some("task.echo"), 8);
 
         assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn classifies_loopback_private_and_public_endpoints() {
+        assert_eq!(
+            classify_multiaddr(&"/ip4/127.0.0.1/tcp/4001".parse().unwrap()),
+            Reachability::Loopback
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip4/192.168.1.10/tcp/4001".parse().unwrap()),
+            Reachability::Private
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip4/203.0.113.10/tcp/4001".parse().unwrap()),
+            Reachability::PublicUnverified
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip6/::1/tcp/4001".parse().unwrap()),
+            Reachability::Loopback
+        );
+    }
+
+    #[test]
+    fn privacy_and_relay_policies_fail_closed() {
+        assert!(ensure_direct_allowed(ConnectivityPolicy::Auto).is_ok());
+        assert!(ensure_direct_allowed(ConnectivityPolicy::Direct).is_ok());
+        assert!(ensure_direct_allowed(ConnectivityPolicy::Relay).is_err());
+        assert!(ensure_direct_allowed(ConnectivityPolicy::Privacy).is_err());
     }
 
     #[test]

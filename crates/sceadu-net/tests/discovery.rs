@@ -69,6 +69,7 @@ async fn stealth_policy_returns_no_neighbors() {
         Some(listen_addr()),
         NodeConfig {
             neighbor_policy: NeighborPolicy::Stealth,
+            ..Default::default()
         },
     )
     .await

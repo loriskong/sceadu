@@ -1,4 +1,5 @@
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -49,6 +50,12 @@ enum NetCommand {
         /// Request UPnP/NAT-PMP/PCP port mappings.
         #[arg(long)]
         port_mapping: bool,
+        /// SOCKS5 proxy for Tor onion dialing.
+        #[arg(long)]
+        tor_proxy: Option<SocketAddr>,
+        /// External onion endpoint to advertise.
+        #[arg(long)]
+        onion: Option<Multiaddr>,
     },
 }
 
@@ -109,6 +116,12 @@ enum Command {
         /// Request UPnP/NAT-PMP/PCP port mappings.
         #[arg(long)]
         port_mapping: bool,
+        /// SOCKS5 proxy for Tor onion dialing.
+        #[arg(long)]
+        tor_proxy: Option<SocketAddr>,
+        /// External onion endpoint to advertise.
+        #[arg(long)]
+        onion: Option<Multiaddr>,
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
@@ -187,6 +200,9 @@ enum Command {
         /// Relay peer to reserve a circuit with.
         #[arg(long)]
         relay: Option<Multiaddr>,
+        /// SOCKS5 proxy for Tor onion dialing.
+        #[arg(long)]
+        tor_proxy: Option<SocketAddr>,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -274,6 +290,8 @@ async fn main() -> Result<()> {
             relay,
             relay_server,
             port_mapping,
+            tor_proxy,
+            onion,
             peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
@@ -293,6 +311,8 @@ async fn main() -> Result<()> {
                     relay,
                     relay_server,
                     port_mapping,
+                    tor_proxy,
+                    onion: onion.clone(),
                 },
             )
             .await?;
@@ -323,6 +343,8 @@ async fn main() -> Result<()> {
                 "connectivity_policy": connectivity_policy.as_str(),
                 "port_mapping": port_mapping,
                 "relay_server": relay_server,
+                "tor_proxy": tor_proxy.map(|proxy| proxy.to_string()),
+                "onion": onion.as_ref().map(|addr| addr.to_string()),
                 "peers": bootstrapped,
                 "note": "press Ctrl-C to stop"
             }))?;
@@ -354,6 +376,8 @@ async fn main() -> Result<()> {
                 relay,
                 relay_server,
                 port_mapping,
+                tor_proxy,
+                onion,
             } => {
                 let identity = load_identity(&cli.path, &cli.passphrase_file)?;
                 let connectivity_policy = parse_connectivity_policy(&connectivity)?;
@@ -375,6 +399,8 @@ async fn main() -> Result<()> {
                         relay,
                         relay_server,
                         port_mapping,
+                        tor_proxy,
+                        onion,
                         ..Default::default()
                     },
                 )
@@ -510,6 +536,7 @@ async fn main() -> Result<()> {
             timeout,
             connectivity,
             relay,
+            tor_proxy,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
@@ -521,6 +548,7 @@ async fn main() -> Result<()> {
                 NodeConfig {
                     connectivity_policy,
                     relay,
+                    tor_proxy,
                     ..Default::default()
                 },
             )

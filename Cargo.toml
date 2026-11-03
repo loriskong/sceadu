@@ -22,8 +22,11 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+data-encoding = "2"
+tokio-socks = "0.5"
+tokio-util = { version = "0.7", features = ["compat"] }
 rpassword = "7"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
 zeroize = { version = "1", features = ["derive"] }

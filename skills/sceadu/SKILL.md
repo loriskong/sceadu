@@ -34,6 +34,12 @@ sceadu serve --connectivity relay --relay <relay-address>
 # Ask the router to map a port (UPnP/NAT-PMP/PCP)
 sceadu serve --listen /ip4/0.0.0.0/tcp/4001 --port-mapping
 
+# Tor privacy mode: loopback listener + external onion service + SOCKS5 proxy
+sceadu serve --connectivity privacy \
+  --listen /ip4/127.0.0.1/tcp/4001 \
+  --tor-proxy 127.0.0.1:9050 \
+  --onion /onion3/<onion-address>:4001
+
 # Discovery
 sceadu discover --addr <introducer-address> --capability task.echo
 
@@ -64,12 +70,23 @@ and known endpoints.
 - `direct`: only direct TCP. Relayed `/p2p-circuit` addresses are rejected.
 - `relay`: require a relay path. Pass `--relay` for a relay client or
   `--relay-server` for a relay server; otherwise it fails closed.
-- `privacy`: require Tor or I2P. Not implemented yet; fails closed and refuses a
-  cleartext listener.
+- `privacy`: route through Tor. Requires `--tor-proxy`; an inbound node also
+  needs a loopback listener and an external onion service advertised with
+  `--onion`. Clearnet listeners are rejected. I2P is not implemented yet.
 
-Relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping are implemented in
-M4b. Tor/I2P and QUIC are M4c. Do not claim a transport is available from the
-policy name alone; read `net status`.
+Relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP, and Tor onion dialing are implemented.
+I2P, QUIC, and public bootstrap/relay infrastructure remain. Do not claim a
+transport is available from the policy name alone; read `net status`.
+
+Tor inbound requires an external Tor daemon:
+
+```text
+HiddenServiceDir /var/lib/tor/sceadu/
+HiddenServicePort 4001 127.0.0.1:4001
+```
+
+Sceadu only dials `.onion` through the SOCKS5 proxy; it does not run Tor itself.
+`privacy` never falls back to a clearnet address.
 
 A relayed address looks like:
 

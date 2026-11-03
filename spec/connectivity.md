@@ -1,7 +1,8 @@
 # Connectivity Policy
 
-M4b implements the first real reachability paths: circuit relay v2, AutoNAT,
-DCUtR, and UPnP/NAT-PMP/PCP port mapping. Tor/I2P and QUIC remain future work.
+M4b implements circuit relay v2, AutoNAT, DCUtR, and UPnP/NAT-PMP/PCP port
+mapping. M4c adds Tor onion dialing through a SOCKS5 proxy and a working
+`privacy` policy. I2P and QUIC remain future work.
 
 ## Policies
 
@@ -9,13 +10,14 @@ DCUtR, and UPnP/NAT-PMP/PCP port mapping. Tor/I2P and QUIC remain future work.
 auto      use direct TCP or a configured relay path
 direct    use only direct TCP; reject /p2p-circuit addresses
 relay     require a relay path; requires --relay or --relay-server
-privacy   require Tor or I2P; unavailable until M4c
+privacy   require Tor; --tor-proxy, plus --onion for inbound
 ```
 
-A `privacy` node must not create a cleartext listener and all operations are
-rejected with `Unsupported`. A relay client must not create a direct listener;
-a relay server must. `direct` rejects `/p2p-circuit` addresses. There is no
-silent downgrade.
+A `privacy` node must not create a cleartext listener. It requires a Tor SOCKS5
+proxy; an inbound node uses a loopback listener and advertises an externally
+configured onion service. `direct` rejects `/p2p-circuit` and `/onion3`
+addresses. A relay client must not create a direct listener; a relay server
+must. There is no silent downgrade.
 
 `auto` currently tries direct TCP and a configured relay path; it does not
 automatically select a relay when a direct path fails.
@@ -102,7 +104,7 @@ STUN-like public address discovery   AutoNAT / observed address
 TURN-like relay                      circuit relay v2
 ICE-like hole punching               DCUtR + candidate addresses
 automatic port mapping               portmapper: UPnP / NAT-PMP / PCP
-anonymous transports                 Tor / I2P, optional
+anonymous transports                 Tor via SOCKS5; I2P future
 ```
 
 This is not WebRTC wire compatibility. A browser-facing WebRTC transport would be
@@ -112,12 +114,22 @@ Relay server mode requires a public/reachable listen address and adds it as an
 external address before accepting reservations. Relay client mode requires
 `--relay`; it reserves a circuit and listens on
 `/p2p/<relay>/p2p-circuit/p2p/<self>`. Port mapping is opt-in and only reports an
-external endpoint after the router grants a mapping. There is no public
-bootstrap or relay deployment in the repository.
+external endpoint after the router grants a mapping.
+
+Tor mode is dial-only inside Sceadu: `TorTransport` resolves `/onion3` to a
+base32 hostname and asks the configured SOCKS5 proxy to connect. Inbound onion
+traffic is handled by an external Tor daemon mapping an onion port to the local
+loopback listener. The signed manifest advertises only the onion endpoint in
+`privacy` mode. I2P is not implemented. There is no public bootstrap or relay
+deployment in the repository.
 
 ## Security
 
-- `privacy` fails closed; a cleartext listener is rejected.
+- `privacy` fails closed; a cleartext listener is rejected and clearnet dials are
+  rejected.
+- Tor hides the peer IP from the remote Sceadu node, but the local Tor daemon and
+  SOCKS proxy still see local traffic; this is not a guarantee against traffic
+  analysis.
 - `direct` rejects relayed addresses.
 - UPnP/NAT-PMP/PCP are opt-in; opening a port is a security-sensitive action.
 - Relay/TURN see IP and traffic metadata even though task content remains

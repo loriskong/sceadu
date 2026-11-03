@@ -2,14 +2,14 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M4b connectivity).** M1, M2, and M3 are complete. M4a added the connectivity policy and address/status model. M4b adds circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping. Tor/I2P and QUIC remain M4c work; the MCP bridge remains deferred.
+> **Status: pre-alpha (M4c Tor).** M1, M2, and M3 are complete. M4a/M4b added the connectivity policy, address/status model, circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping. M4c adds Tor onion dialing over SOCKS5 and a working `privacy` policy. I2P, QUIC, and public bootstrap infrastructure remain. The MCP bridge remains deferred.
 
 ## What it does
 
 - **No central server.** Every Sceadu instance is a node. There is no global registry, routing service, or message broker.
 - **Self-certifying identity.** An agent's Ed25519 public key is its identity. No account, email address, or phone number is required.
 - **Discovery with a manual seed.** A structured DHT stores signed manifests and capability provider records. With at least one reachable seed, nodes can look up agents and ask neighbors for introductions, with verification instead of blind trust. There is no public bootstrap network yet.
-- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. Circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping are available; QUIC, Tor, and I2P are not implemented yet.
+- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. Circuit relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP port mapping, and Tor onion dialing over SOCKS5 are available; I2P and QUIC are not implemented yet.
 - **Agent-native tasks.** Signed capability manifests, streaming task requests, and a reference `task.echo` handler let agents call each other. The MCP bridge is deferred.
 - **CLI + skill.** The product is a single CLI binary. `sceadu skill install` writes an agent skill that teaches a local agent how to use it.
 
@@ -23,7 +23,7 @@ Sceadu CLI
     |-- session: Noise-authenticated request/response streams, deadlines
     |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
     |-- connectivity: policy + address book + reachability status
-    |-- transport: TCP + Noise + Yamux; relay v2, AutoNAT/DCUtR, port mapping (QUIC planned)
+    |-- transport: TCP + Noise + Yamux; relay v2, AutoNAT/DCUtR, port mapping, Tor onion (I2P/QUIC planned)
     `-- identity: Ed25519 keys, signed manifests and invites
 ```
 
@@ -174,7 +174,9 @@ M4b implements the first real NAT-reachability paths:
 - `direct`: only direct TCP; relayed addresses are rejected.
 - `relay`: use a relay path. A relay client must pass `--relay`; a relay server
   uses `--relay-server` and needs a direct listen address.
-- `privacy`: still fails closed until Tor/I2P lands in M4c.
+- `privacy`: Tor mode. Requires `--tor-proxy`; an inbound node also needs a
+  loopback listener plus an external onion service advertised with `--onion`.
+  Clearnet listeners are rejected. I2P is not implemented yet.
 
 `sceadu net status` reports the policy, local reachability (`loopback`, `private`,
 `public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, `unknown`),
@@ -191,14 +193,16 @@ Implemented in M4b:
   The external mapping is added to the address book and manifest when it
   appears.
 
-M4c still needs Tor/I2P, public bootstrap/relay infrastructure, and QUIC. The
-`privacy` policy remains fail-closed: no cleartext listener and no fallback.
+M4c has Tor outbound dialing through SOCKS5 and onion endpoint advertisement.
+Inbound onion traffic is mapped by an external Tor daemon to the loopback
+listener; Sceadu itself does not run a Tor daemon. I2P, public bootstrap/relay
+infrastructure, and QUIC remain. The privacy policy has no silent fallback.
 
 ## Public-network readiness
 
 The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records; circuit relay v2 can carry task traffic when a relay is configured.
 
-Relay v2, AutoNAT/DCUtR, and port mapping work, but there is no public bootstrap/relay network, no external-address advertisement for arbitrary NATs, and no Tor/I2P or QUIC yet. Do not expose `serve` to the public internet without rate limiting and abuse controls.
+Relay v2, AutoNAT/DCUtR, port mapping, and Tor onion dialing work, but there is no public bootstrap/relay network, no I2P or QUIC yet, and inbound Tor requires an externally configured onion service. Do not expose `serve` to the public internet without rate limiting and abuse controls.
 
 ## Tasks
 

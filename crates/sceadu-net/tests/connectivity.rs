@@ -56,6 +56,7 @@ async fn privacy_policy_blocks_direct_dial() {
         None,
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -76,6 +77,7 @@ async fn privacy_policy_rejects_cleartext_listener() {
         Some(listen_addr()),
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -168,4 +170,195 @@ async fn port_mapping_is_reported_as_requested() {
         .any(|transport| transport.transport == TransportKind::PortMapping && transport.available));
 
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn privacy_status_reports_tor_available() {
+    let identity = Identity::generate();
+    let (node, _) = spawn_with_config(
+        &identity,
+        None,
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let status = node.network_status().await.unwrap();
+    assert_eq!(status.policy, ConnectivityPolicy::Privacy);
+    assert!(status
+        .transports
+        .iter()
+        .any(|transport| transport.transport == TransportKind::Tor && transport.available));
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn privacy_loopback_listener_requires_onion() {
+    let identity = Identity::generate();
+    let result = spawn_with_config(
+        &identity,
+        Some(listen_addr()),
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn privacy_manifest_advertises_only_the_onion_endpoint() {
+    use data_encoding::BASE32_NOPAD;
+
+    let identity = Identity::generate();
+    let mut hash = [0u8; 35];
+    hash[0] = 1;
+    let onion: Multiaddr = format!(
+        "/onion3/{}:4001",
+        BASE32_NOPAD.encode(&hash).to_ascii_lowercase()
+    )
+    .parse()
+    .unwrap();
+
+    let (node, _) = spawn_with_config(
+        &identity,
+        Some(listen_addr()),
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            onion: Some(onion.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let status = node.network_status().await.unwrap();
+    assert_eq!(status.listen.as_deref(), Some(onion.to_string().as_str()));
+    assert_eq!(status.reachability, Reachability::Tor);
+
+    node.shutdown().await;
+}
+
+async fn handle_socks5(mut socket: tokio::net::TcpStream, target: std::net::SocketAddr) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut greeting = [0u8; 2];
+    if socket.read_exact(&mut greeting).await.is_err() {
+        return;
+    }
+    let mut methods = vec![0u8; greeting[1] as usize];
+    if socket.read_exact(&mut methods).await.is_err() {
+        return;
+    }
+    if socket.write_all(&[5, 0]).await.is_err() {
+        return;
+    }
+
+    let mut request = [0u8; 4];
+    if socket.read_exact(&mut request).await.is_err() {
+        return;
+    }
+    let address_len = match request[3] {
+        1 => 4,
+        3 => {
+            let mut len = [0u8; 1];
+            if socket.read_exact(&mut len).await.is_err() {
+                return;
+            }
+            len[0] as usize
+        }
+        4 => 16,
+        _ => return,
+    };
+    let mut address = vec![0u8; address_len];
+    if socket.read_exact(&mut address).await.is_err() {
+        return;
+    }
+    let mut port = [0u8; 2];
+    if socket.read_exact(&mut port).await.is_err() {
+        return;
+    }
+
+    let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await else {
+        let _ = socket.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+        return;
+    };
+    if socket
+        .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let _ = tokio::io::copy_bidirectional(&mut socket, &mut upstream).await;
+}
+
+#[tokio::test]
+async fn privacy_tor_transport_dials_through_socks() {
+    use data_encoding::BASE32_NOPAD;
+    use std::net::SocketAddr;
+
+    let server_identity = Identity::generate();
+    let client_identity = Identity::generate();
+    let (server, server_addr) = spawn(&server_identity, Some(listen_addr())).await.unwrap();
+    let server_addr = server_addr.unwrap();
+    let server_peer = server.peer_id();
+
+    let port = server_addr
+        .iter()
+        .find_map(|protocol| match protocol {
+            libp2p::multiaddr::Protocol::Tcp(port) => Some(port),
+            _ => None,
+        })
+        .unwrap();
+    let target = SocketAddr::from(([127, 0, 0, 1], port));
+
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = proxy_listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = proxy_listener.accept().await else {
+                break;
+            };
+            tokio::spawn(handle_socks5(stream, target));
+        }
+    });
+
+    let mut hash = [0u8; 35];
+    hash[0] = 1;
+    let onion: Multiaddr = format!(
+        "/onion3/{}:4001/p2p/{}",
+        BASE32_NOPAD.encode(&hash).to_ascii_lowercase(),
+        server_peer
+    )
+    .parse()
+    .unwrap();
+
+    let (client, _) = spawn_with_config(
+        &client_identity,
+        None,
+        NodeConfig {
+            connectivity_policy: ConnectivityPolicy::Privacy,
+            tor_proxy: Some(proxy_addr),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let peer = client.dial(onion).await.unwrap();
+    let manifest = client.request_manifest(peer).await.unwrap();
+    assert_eq!(manifest.body.agent_id, server_identity.agent_id());
+
+    client.shutdown().await;
+    server.shutdown().await;
 }

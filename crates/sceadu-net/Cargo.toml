@@ -8,6 +8,7 @@ description = "libp2p transport and session layer for Sceadu"
 [dependencies]
 base64.workspace = true
 ciborium.workspace = true
+data-encoding.workspace = true
 ed25519-dalek.workspace = true
 futures.workspace = true
 rand_core.workspace = true
@@ -19,3 +20,5 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-socks.workspace = true
+tokio-util.workspace = true

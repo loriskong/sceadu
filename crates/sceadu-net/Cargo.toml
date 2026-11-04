@@ -13,7 +13,6 @@ ed25519-dalek.workspace = true
 futures.workspace = true
 rand_core.workspace = true
 libp2p.workspace = true
-portmapper = { version = "0.13", default-features = false }
 sceadu-core = { path = "../sceadu-core" }
 serde.workspace = true
 serde_json.workspace = true

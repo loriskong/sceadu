@@ -2,7 +2,7 @@ use sceadu_core::Identity;
 use sceadu_net::{spawn, spawn_with_config, Multiaddr, NeighborPolicy, NodeConfig};
 
 fn listen_addr() -> Multiaddr {
-    "/ip4/127.0.0.1/tcp/0".parse().unwrap()
+    "/ip6/::1/tcp/0".parse().unwrap()
 }
 
 #[tokio::test]

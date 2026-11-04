@@ -2,14 +2,14 @@
 
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
 
-> **Status: pre-alpha (M4c Tor/I2P).** M1, M2, and M3 are complete. M4a/M4b added the connectivity policy, address/status model, circuit relay v2, AutoNAT/DCUtR, and UPnP/NAT-PMP/PCP port mapping. M4c adds Tor onion and I2P `.i2p` dialing over SOCKS5 plus a working `privacy` policy. QUIC and public bootstrap infrastructure remain. The MCP bridge remains deferred.
+> **Status: pre-alpha (IPv6-only).** M1, M2, and M3 are complete. M4a/M4b added the connectivity policy, address/status model, and circuit relay v2. Sceadu is now IPv6-only: IPv4 listen/dial/relay/SOCKS addresses are rejected. Tor onion and I2P `.i2p` dialing work over IPv6 SOCKS proxies. UPnP/NAT-PMP/PCP, AutoNAT, and DCUtR were removed because they are IPv4/NAT features. QUIC and public bootstrap infrastructure remain. The MCP bridge remains deferred.
 
 ## What it does
 
 - **No central server.** Every Sceadu instance is a node. There is no global registry, routing service, or message broker.
 - **Self-certifying identity.** An agent's Ed25519 public key is its identity. No account, email address, or phone number is required.
 - **Discovery with a manual seed.** A structured DHT stores signed manifests and capability provider records. With at least one reachable seed, nodes can look up agents and ask neighbors for introductions, with verification instead of blind trust. There is no public bootstrap network yet.
-- **End-to-end encrypted sessions.** Nodes connect over TCP with Noise encryption and Yamux multiplexing. Circuit relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP port mapping, Tor onion dialing, and I2P `.i2p` dialing over SOCKS5 are available; QUIC is not implemented yet.
+- **End-to-end encrypted sessions.** Nodes connect over IPv6 TCP with Noise encryption and Yamux multiplexing. Circuit relay v2, Tor onion dialing, and I2P `.i2p` dialing over IPv6 SOCKS proxies are available; IPv4 and QUIC are not supported.
 - **Agent-native tasks.** Signed capability manifests, streaming task requests, and a reference `task.echo` handler let agents call each other. The MCP bridge is deferred.
 - **CLI + skill.** The product is a single CLI binary. `sceadu skill install` writes an agent skill that teaches a local agent how to use it.
 
@@ -23,7 +23,7 @@ Sceadu CLI
     |-- session: Noise-authenticated request/response streams, deadlines
     |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
     |-- connectivity: policy + address book + reachability status
-    |-- transport: TCP + Noise + Yamux; relay v2, AutoNAT/DCUtR, port mapping, Tor onion, I2P (QUIC planned)
+    |-- transport: IPv6 TCP + Noise + Yamux; relay v2, Tor onion, I2P (QUIC planned)
     `-- identity: Ed25519 keys, signed manifests and invites
 ```
 
@@ -40,6 +40,7 @@ Architecture sections are maintained manually. Until CI sync is enabled, run the
 ## Requirements
 
 - Rust stable (M1+)
+- IPv6 connectivity; Sceadu rejects IPv4 peer and proxy addresses
 - Linux, macOS, or Windows for the desktop CLI
 - No Node.js or Python runtime is required to run the product
 
@@ -94,13 +95,13 @@ cargo run -p sceadu-cli -- manifest --capability task.echo > manifest.json
 cargo run -p sceadu-cli -- verify manifest.json
 
 # Start a foreground node that answers manifest and echo requests.
-cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
+cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0
 
 # Start with a stealth neighbor policy instead.
 cargo run -p sceadu-cli -- serve --neighbor-policy stealth
 
 # Start a node and seed it with a known peer.
-cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0 --peer <known-peer-address>
+cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0 --peer <known-peer-address>
 
 # In another terminal, dial the printed address and echo.
 cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
@@ -133,7 +134,7 @@ To try two nodes locally, create a second keystore and use it for the client:
 ```sh
 # Terminal A
 cargo run -p sceadu-cli -- init
-cargo run -p sceadu-cli -- serve --listen /ip4/127.0.0.1/tcp/0
+cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0
 
 # Terminal B
 cargo run -p sceadu-cli -- --path /tmp/sceadu-b.json init
@@ -157,11 +158,9 @@ sceadu daemon start
 sceadu status --json
 ```
 
-Connectivity roadmap: M4b is implemented (UPnP/NAT-PMP/PCP, AutoNAT/DCUtR, relay v2);
-M4c adds optional Tor/I2P transports and strict privacy routing. `net status`
-reports unimplemented transports as unavailable.
-
-NAT traversal, circuit relay, public bootstrap nodes, external address advertisement, and QUIC are prerequisites for internet-wide use. They are not part of M3.
+Connectivity roadmap: IPv6-only transport, relay v2, Tor, and I2P are implemented;
+IPv6 firewall behavior, public bootstrap nodes, and QUIC are prerequisites for
+internet-wide use. `net status` reports unimplemented transports as unavailable.
 
 ## Discovery
 
@@ -175,43 +174,42 @@ M2 implements two complementary discovery paths:
 
 ## Connectivity
 
-M4b implements the first real NAT-reachability paths:
+Sceadu is IPv6-only. Every `--listen`, `--addr`, `--peer`, `--relay`, and
+manifest endpoint must be IPv6 (or an onion/I2P address); `/ip4` is rejected.
+A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local,
+multicast, and IPv4-mapped addresses are rejected. There is no external-address
+parameter: the bound IPv6 address is the advertised address.
 
-- `auto`: use direct TCP or a configured relay path.
-- `direct`: only direct TCP; relayed addresses are rejected.
-- `relay`: use a relay path. A relay client must pass `--relay`; a relay server
-  uses `--relay-server` and needs a direct listen address.
-- `privacy`: Tor/I2P mode. Requires `--tor-proxy` or `--i2p-proxy`; an inbound
-  node also needs a loopback listener plus an external onion service
-  (`--onion`) or I2P server tunnel (`--i2p-address`). Clearnet listeners are
-  rejected.
+Policies:
+
+- `auto`: use direct IPv6 TCP or a configured relay path.
+- `direct`: only direct IPv6 TCP; relayed/anonymous addresses are rejected.
+- `relay`: use a relay path. A relay client passes `--relay`; a relay server
+  uses `--relay-server` and a concrete global IPv6 listen address.
+- `privacy`: Tor/I2P mode. Requires `--tor-proxy` or `--i2p-proxy` as an IPv6
+  loopback address, plus an external onion/I2P endpoint for inbound. A cleartext
+  listener is rejected.
 
 `sceadu net status` reports the policy, local reachability (`loopback`, `private`,
-`public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, `unknown`),
-transport availability, known endpoints, external endpoint, and relay
-reservation. Address records carry transport, reachability, source, and
-verification state.
+`link_local`, `public_unverified`, `public_verified`, `relay`, `tor`, `i2p`,
+`unknown`), transport availability, known endpoints, and relay reservation.
 
-Implemented in M4b:
+Implemented:
 
 - Circuit relay v2 client and server; relayed addresses use `/p2p-circuit` and
   are advertised in the signed manifest.
-- AutoNAT reachability probes and DCUtR hole-punching behaviour.
-- UPnP/NAT-PMP/PCP port mapping via `portmapper` when `--port-mapping` is set.
-  The external mapping is added to the address book and manifest when it
-  appears.
+- Tor outbound dialing and I2P `.i2p` dialing through SOCKS5 proxies bound to
+  IPv6 loopback, e.g. `[::1]:9050` and `[::1]:4447`.
+- Inbound onion/I2P traffic is mapped by an external Tor daemon or I2P server
+  tunnel to the loopback listener; Sceadu does not run those daemons.
 
-M4c has Tor outbound dialing and I2P `.i2p` dialing, both through a SOCKS5 proxy.
-Inbound onion/I2P traffic is mapped by an external Tor daemon or I2P server
-tunnel to the loopback listener; Sceadu does not run those daemons. Public
-bootstrap/relay infrastructure and QUIC remain. The privacy policy has no
-silent fallback.
-
+Removed with IPv4 support: UPnP/NAT-PMP/PCP port mapping (`portmapper`), AutoNAT,
+and DCUtR. The privacy policy has no silent fallback.
 ## Public-network readiness
 
 The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records; circuit relay v2 can carry task traffic when a relay is configured.
 
-Relay v2, AutoNAT/DCUtR, port mapping, Tor onion, and I2P dialing work, but there is no public bootstrap/relay network, no QUIC yet, and inbound Tor/I2P requires externally configured services. Do not expose `serve` to the public internet without rate limiting and abuse controls.
+Relay v2, IPv6 TCP, Tor onion, and I2P dialing work, but there is no public bootstrap/relay network, no QUIC yet, and inbound Tor/I2P requires externally configured services. Do not expose `serve` to the public internet without rate limiting and abuse controls.
 
 ## Tasks
 

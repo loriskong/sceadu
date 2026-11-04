@@ -150,7 +150,7 @@ mod tests {
     fn body(identity: &Identity) -> ManifestBody {
         let mut body = ManifestBody::new(identity.agent_id(), 1, 3600);
         body.capabilities.push(Capability::new("task.echo"));
-        body.endpoints.push("/ip4/127.0.0.1/tcp/4001".to_owned());
+        body.endpoints.push("/ip6/::1/tcp/4001".to_owned());
         body.protocols.push("/sceadu/echo/1.0.0".to_owned());
         body
     }

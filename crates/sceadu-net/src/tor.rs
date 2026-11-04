@@ -5,7 +5,7 @@
 
 use std::future::Ready;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV6};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -23,11 +23,11 @@ type TorDial = BoxFuture<'static, Result<Compat<TcpStream>, io::Error>>;
 /// Dial-only transport for `/onion3/...` multiaddresses through a SOCKS5 proxy.
 #[derive(Clone)]
 pub struct TorTransport {
-    proxy: Option<SocketAddr>,
+    proxy: Option<SocketAddrV6>,
 }
 
 impl TorTransport {
-    pub fn new(proxy: Option<SocketAddr>) -> Self {
+    pub fn new(proxy: Option<SocketAddrV6>) -> Self {
         Self { proxy }
     }
 }
@@ -64,7 +64,7 @@ impl Transport for TorTransport {
         })?;
 
         Ok(Box::pin(async move {
-            let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
+            let stream = Socks5Stream::connect(SocketAddr::V6(proxy), (host.as_str(), port))
                 .await
                 .map_err(|error| io::Error::other(error.to_string()))?;
             Ok(stream.into_inner().compat())
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn rejects_non_onion_address() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let addr: Multiaddr = "/ip6/::1/tcp/4001".parse().unwrap();
         assert!(onion_target(&addr).is_err());
     }
 

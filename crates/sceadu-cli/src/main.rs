@@ -1,5 +1,5 @@
 use std::fs;
-use std::net::SocketAddr;
+use std::net::SocketAddrV6;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,8 +9,8 @@ use rpassword::prompt_password;
 use sceadu_core::keystore;
 use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
 use sceadu_net::{
-    spawn as spawn_node, spawn_with_config, ConnectivityPolicy, InviteTicket, Multiaddr,
-    NeighborPolicy, NodeConfig, TaskEventKind,
+    ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, spawn as spawn_node, spawn_with_config,
+    ConnectivityPolicy, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig, TaskEventKind,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -36,7 +36,7 @@ enum NetCommand {
     /// Print local connectivity status.
     Status {
         /// Listen multiaddr used for the status node.
-        #[arg(long, default_value = "/ip4/127.0.0.1/tcp/0")]
+        #[arg(long, default_value = "/ip6/::1/tcp/0")]
         listen: Multiaddr,
         /// Connectivity policy to report.
         #[arg(long, default_value = "auto")]
@@ -47,18 +47,15 @@ enum NetCommand {
         /// Act as a circuit relay v2 server.
         #[arg(long)]
         relay_server: bool,
-        /// Request UPnP/NAT-PMP/PCP port mappings.
-        #[arg(long)]
-        port_mapping: bool,
         /// SOCKS5 proxy for Tor onion dialing.
         #[arg(long)]
-        tor_proxy: Option<SocketAddr>,
+        tor_proxy: Option<SocketAddrV6>,
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
         /// SOCKS5 proxy for I2P dialing.
         #[arg(long)]
-        i2p_proxy: Option<SocketAddr>,
+        i2p_proxy: Option<SocketAddrV6>,
         /// External I2P endpoint to advertise.
         #[arg(long)]
         i2p_address: Option<Multiaddr>,
@@ -105,7 +102,7 @@ enum Command {
     /// Start a node and answer manifest and echo requests until Ctrl-C.
     Serve {
         /// Listen multiaddr.
-        #[arg(long, default_value = "/ip4/127.0.0.1/tcp/0")]
+        #[arg(long, default_value = "/ip6/::1/tcp/0")]
         listen: Multiaddr,
         /// Neighbor query policy: open or stealth.
         #[arg(long, default_value = "open")]
@@ -119,18 +116,15 @@ enum Command {
         /// Act as a circuit relay v2 server.
         #[arg(long)]
         relay_server: bool,
-        /// Request UPnP/NAT-PMP/PCP port mappings.
-        #[arg(long)]
-        port_mapping: bool,
         /// SOCKS5 proxy for Tor onion dialing.
         #[arg(long)]
-        tor_proxy: Option<SocketAddr>,
+        tor_proxy: Option<SocketAddrV6>,
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
         /// SOCKS5 proxy for I2P dialing.
         #[arg(long)]
-        i2p_proxy: Option<SocketAddr>,
+        i2p_proxy: Option<SocketAddrV6>,
         /// External I2P endpoint to advertise.
         #[arg(long)]
         i2p_address: Option<Multiaddr>,
@@ -214,10 +208,10 @@ enum Command {
         relay: Option<Multiaddr>,
         /// SOCKS5 proxy for Tor onion dialing.
         #[arg(long)]
-        tor_proxy: Option<SocketAddr>,
+        tor_proxy: Option<SocketAddrV6>,
         /// SOCKS5 proxy for I2P dialing.
         #[arg(long)]
-        i2p_proxy: Option<SocketAddr>,
+        i2p_proxy: Option<SocketAddrV6>,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -304,7 +298,6 @@ async fn main() -> Result<()> {
             connectivity,
             relay,
             relay_server,
-            port_mapping,
             tor_proxy,
             onion,
             i2p_proxy,
@@ -319,6 +312,9 @@ async fn main() -> Result<()> {
             } else {
                 Some(listen)
             };
+            if let Some(address) = &listen {
+                ensure_ipv6_listen_addr(address)?;
+            }
             let (node, address) = spawn_with_config(
                 &identity,
                 listen,
@@ -327,7 +323,6 @@ async fn main() -> Result<()> {
                     connectivity_policy,
                     relay,
                     relay_server,
-                    port_mapping,
                     tor_proxy,
                     onion: onion.clone(),
                     i2p_proxy,
@@ -360,7 +355,6 @@ async fn main() -> Result<()> {
                 "capabilities": ["task.echo"],
                 "neighbor_policy": policy.as_str(),
                 "connectivity_policy": connectivity_policy.as_str(),
-                "port_mapping": port_mapping,
                 "relay_server": relay_server,
                 "tor_proxy": tor_proxy.map(|proxy| proxy.to_string()),
                 "onion": onion.as_ref().map(|addr| addr.to_string()),
@@ -396,7 +390,6 @@ async fn main() -> Result<()> {
                 connectivity,
                 relay,
                 relay_server,
-                port_mapping,
                 tor_proxy,
                 onion,
                 i2p_proxy,
@@ -414,6 +407,9 @@ async fn main() -> Result<()> {
                 } else {
                     None
                 };
+                if let Some(address) = &listen {
+                    ensure_ipv6_listen_addr(address)?;
+                }
                 let (node, _) = spawn_with_config(
                     &identity,
                     listen,
@@ -421,7 +417,6 @@ async fn main() -> Result<()> {
                         connectivity_policy,
                         relay,
                         relay_server,
-                        port_mapping,
                         tor_proxy,
                         onion,
                         i2p_proxy,
@@ -513,11 +508,8 @@ async fn main() -> Result<()> {
         }
         Command::Publish { peer } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
-            let (node, listen) = spawn_node(
-                &identity,
-                Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>()?),
-            )
-            .await?;
+            let (node, listen) =
+                spawn_node(&identity, Some("/ip6/::1/tcp/0".parse::<Multiaddr>()?)).await?;
             let listen = listen.ok_or_else(|| anyhow!("no listen address"))?;
             let peer_id = node.dial(peer.clone()).await?;
             node.add_address(peer_id, peer.clone()).await?;
@@ -537,11 +529,8 @@ async fn main() -> Result<()> {
         }
         Command::Lookup { peer, agent_id } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
-            let (node, _) = spawn_node(
-                &identity,
-                Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>()?),
-            )
-            .await?;
+            let (node, _) =
+                spawn_node(&identity, Some("/ip6/::1/tcp/0".parse::<Multiaddr>()?)).await?;
             let peer_id = node.dial(peer.clone()).await?;
             node.add_address(peer_id, peer.clone()).await?;
             node.bootstrap().await?;
@@ -759,11 +748,18 @@ fn build_manifest(
 ) -> Result<Manifest> {
     let mut body = ManifestBody::new(identity.agent_id(), 1, ttl);
     body.capabilities.push(Capability::new(capability));
-    body.endpoints = if endpoint.is_empty() {
-        vec!["/ip4/127.0.0.1/tcp/0".to_owned()]
+    let endpoints = if endpoint.is_empty() {
+        vec!["/ip6/::1/tcp/0".to_owned()]
     } else {
         endpoint
     };
+    for value in &endpoints {
+        let address = value
+            .parse::<Multiaddr>()
+            .with_context(|| format!("invalid endpoint multiaddr: {value}"))?;
+        ensure_ipv6_peer_addr(&address)?;
+    }
+    body.endpoints = endpoints;
     body.protocols.push("/sceadu/echo/1.0.0".to_owned());
 
     Ok(Manifest::sign(body, identity)?)

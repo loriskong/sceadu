@@ -4,14 +4,12 @@
 //! echo RPC over a libp2p request/response stream.
 
 use std::collections::{HashMap, HashSet};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
-use std::num::NonZeroU16;
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use futures::StreamExt;
-use libp2p::autonat::NatStatus;
 use libp2p::core::upgrade::Version;
 use libp2p::core::Transport;
 use libp2p::identity::Keypair;
@@ -53,8 +51,6 @@ const MAX_TASK_ID_LEN: usize = 128;
 struct Behaviour {
     rpc: request_response::json::Behaviour<RpcRequest, RpcResponse>,
     kad: libp2p::kad::Behaviour<MemoryStore>,
-    autonat: libp2p::autonat::Behaviour,
-    dcutr: libp2p::dcutr::Behaviour,
     relay_client: libp2p::relay::client::Behaviour,
     relay_server: Toggle<libp2p::relay::Behaviour>,
 }
@@ -204,8 +200,6 @@ impl ConnectivityPolicy {
 pub enum TransportKind {
     Tcp,
     Relay,
-    #[serde(rename = "port_mapping")]
-    PortMapping,
     Tor,
     #[serde(rename = "i2p")]
     I2P,
@@ -216,7 +210,6 @@ impl TransportKind {
         match self {
             Self::Tcp => "tcp",
             Self::Relay => "relay",
-            Self::PortMapping => "port_mapping",
             Self::Tor => "tor",
             Self::I2P => "i2p",
         }
@@ -229,6 +222,7 @@ impl TransportKind {
 pub enum Reachability {
     Loopback,
     Private,
+    LinkLocal,
     PublicUnverified,
     PublicVerified,
     Relay,
@@ -242,6 +236,7 @@ impl Reachability {
         match self {
             Self::Loopback => "loopback",
             Self::Private => "private",
+            Self::LinkLocal => "link_local",
             Self::PublicUnverified => "public_unverified",
             Self::PublicVerified => "public_verified",
             Self::Relay => "relay",
@@ -280,8 +275,6 @@ pub struct NetworkStatus {
     pub reachability: Reachability,
     pub transports: Vec<TransportStatus>,
     pub endpoints: Vec<EndpointRecord>,
-    pub external_endpoint: Option<String>,
-    pub port_mapping: bool,
     pub relay_reservation: Option<String>,
 }
 
@@ -294,14 +287,12 @@ pub struct NodeConfig {
     pub relay: Option<Multiaddr>,
     /// Whether this node also acts as a circuit relay server.
     pub relay_server: bool,
-    /// Whether to request UPnP/NAT-PMP/PCP port mappings.
-    pub port_mapping: bool,
     /// SOCKS5 proxy used for Tor onion dialing.
-    pub tor_proxy: Option<SocketAddr>,
+    pub tor_proxy: Option<SocketAddrV6>,
     /// External onion endpoint advertised by this node.
     pub onion: Option<Multiaddr>,
     /// SOCKS5 proxy used for I2P dialing.
-    pub i2p_proxy: Option<SocketAddr>,
+    pub i2p_proxy: Option<SocketAddrV6>,
     /// External I2P endpoint advertised by this node.
     pub i2p_address: Option<Multiaddr>,
 }
@@ -401,13 +392,10 @@ struct NodeState {
     address_book: AddressBook,
     pending_dial_endpoints: HashMap<PeerId, String>,
     connectivity_policy: ConnectivityPolicy,
-    port_mapping: bool,
     relay_enabled: bool,
     relay_server: bool,
     tor_enabled: bool,
     i2p_enabled: bool,
-    external_endpoint: Option<String>,
-    autonat_reachability: Option<Reachability>,
     relay_reservation: Option<PeerId>,
     pending_asks: HashMap<OutboundRequestId, PendingAsk>,
     active_tasks: HashMap<String, ActiveTask>,
@@ -738,6 +726,12 @@ pub async fn spawn_with_config(
     listen: Option<Multiaddr>,
     config: NodeConfig,
 ) -> Result<(NodeHandle, Option<Multiaddr>)> {
+    if let Some(listen) = &listen {
+        ensure_ipv6_listen_addr(listen)?;
+    }
+    if let Some(relay) = &config.relay {
+        ensure_ipv6_peer_addr(relay)?;
+    }
     match config.connectivity_policy {
         ConnectivityPolicy::Privacy => {
             if config.tor_proxy.is_none() && config.i2p_proxy.is_none() {
@@ -861,11 +855,6 @@ pub async fn spawn_with_config(
             Behaviour {
                 rpc: rpc_behaviour(),
                 kad,
-                autonat: libp2p::autonat::Behaviour::new(
-                    peer_id,
-                    libp2p::autonat::Config::default(),
-                ),
-                dcutr: libp2p::dcutr::Behaviour::new(peer_id),
                 relay_client,
                 relay_server: Toggle::from(relay_server),
             }
@@ -934,40 +923,6 @@ pub async fn spawn_with_config(
         swarm.add_external_address(i2p.clone());
     }
 
-    let port_mapping_rx = if config.port_mapping {
-        listen_addr
-            .as_ref()
-            .filter(|address| !is_relayed(address))
-            .and_then(tcp_port)
-            .map(|port| {
-                let client = portmapper::Client::new(portmapper::Config {
-                    protocol: portmapper::Protocol::Tcp,
-                    ..Default::default()
-                });
-                client.update_local_port(port);
-                let mut watch = client.watch_external_address();
-                let (sender, receiver) = mpsc::channel(8);
-                tokio::spawn(async move {
-                    let _client = client;
-                    let initial = *watch.borrow();
-                    if let Some(address) = initial {
-                        let _ = sender.send(address).await;
-                    }
-                    while watch.changed().await.is_ok() {
-                        let current = *watch.borrow();
-                        if let Some(address) = current {
-                            if sender.send(address).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                });
-                receiver
-            })
-    } else {
-        None
-    };
-
     let mut body = ManifestBody::new(identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
     body.capabilities.push(Capability::new("task.echo"));
     if config.connectivity_policy == ConnectivityPolicy::Privacy {
@@ -1014,7 +969,6 @@ pub async fn spawn_with_config(
         identity.clone(),
         receiver,
         config,
-        port_mapping_rx,
     ));
     let handle = NodeHandle {
         peer_id,
@@ -1062,11 +1016,9 @@ async fn run_node(
     identity: Identity,
     mut commands: mpsc::Receiver<Command>,
     config: NodeConfig,
-    mut port_mapping_rx: Option<mpsc::Receiver<SocketAddrV4>>,
 ) {
     let mut state = NodeState {
         connectivity_policy: config.connectivity_policy,
-        port_mapping: config.port_mapping,
         relay_enabled: config.relay.is_some(),
         relay_server: config.relay_server,
         tor_enabled: config.tor_proxy.is_some(),
@@ -1095,26 +1047,6 @@ async fn run_node(
                         }
                     }
                     None => break,
-                }
-            }
-            port_mapping = async {
-                match port_mapping_rx.as_mut() {
-                    Some(receiver) => receiver.recv().await,
-                    None => std::future::pending::<Option<SocketAddrV4>>().await,
-                }
-            } => {
-                if let Some(socket) = port_mapping {
-                    if let Ok(mut address) = format!("/ip4/{}/tcp/{}", socket.ip(), socket.port())
-                        .parse::<Multiaddr>()
-                    {
-                        address.push(Protocol::P2p(*swarm.local_peer_id()));
-                        swarm.add_external_address(address.clone());
-                        state
-                            .address_book
-                            .upsert(endpoint_record(&address, "port_mapping", false));
-                        state.external_endpoint = Some(address.to_string());
-                        add_manifest_endpoint(&mut local_manifest, &identity, &address);
-                    }
                 }
             }
         }
@@ -1164,7 +1096,10 @@ fn handle_event(
             state
                 .address_book
                 .upsert(endpoint_record(&address, "listen", false));
-            if state.connectivity_policy != ConnectivityPolicy::Privacy || is_onion(&address) {
+            if state.connectivity_policy != ConnectivityPolicy::Privacy
+                || is_onion(&address)
+                || is_i2p(&address)
+            {
                 add_manifest_endpoint(local_manifest, identity, &address);
             }
         }
@@ -1172,7 +1107,10 @@ fn handle_event(
             state
                 .address_book
                 .upsert(endpoint_record(&address, "external", false));
-            if state.connectivity_policy != ConnectivityPolicy::Privacy || is_onion(&address) {
+            if state.connectivity_policy != ConnectivityPolicy::Privacy
+                || is_onion(&address)
+                || is_i2p(&address)
+            {
                 add_manifest_endpoint(local_manifest, identity, &address);
             }
         }
@@ -1181,16 +1119,6 @@ fn handle_event(
                 handle_rpc_event(swarm, event, local_manifest, state, config)
             }
             BehaviourEvent::Kad(event) => handle_kad_event(event, state),
-            BehaviourEvent::Autonat(event) => {
-                if let libp2p::autonat::Event::StatusChanged { new, .. } = event {
-                    state.autonat_reachability = match new {
-                        NatStatus::Public(_) => Some(Reachability::PublicVerified),
-                        NatStatus::Private => Some(Reachability::Private),
-                        NatStatus::Unknown => None,
-                    };
-                }
-            }
-            BehaviourEvent::Dcutr(_) => {}
             BehaviourEvent::RelayClient(event) => {
                 if let libp2p::relay::client::Event::ReservationReqAccepted {
                     relay_peer_id, ..
@@ -1677,6 +1605,7 @@ fn ensure_dial_allowed(
     i2p_enabled: bool,
     addr: &Multiaddr,
 ) -> Result<()> {
+    ensure_ipv6_peer_addr(addr)?;
     match policy {
         ConnectivityPolicy::Auto => Ok(()),
         ConnectivityPolicy::Direct => {
@@ -1737,10 +1666,96 @@ fn ensure_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
     }
 }
 
+pub fn ensure_ipv6_listen_addr(addr: &Multiaddr) -> Result<()> {
+    let mut has_ip6 = false;
+    let mut has_tcp = false;
+    for protocol in addr.iter() {
+        match protocol {
+            Protocol::Ip4(_) => {
+                return Err(Error::Unsupported(
+                    "IPv4 is not supported; listen on a concrete /ip6 address".to_owned(),
+                ));
+            }
+            Protocol::Ip6(ip) => {
+                if ip.is_unspecified() {
+                    return Err(Error::Unsupported(
+                        "listen address must be a concrete IPv6 address, not ::".to_owned(),
+                    ));
+                }
+                if ip.is_multicast() || ip.to_ipv4_mapped().is_some() {
+                    return Err(Error::Unsupported(
+                        "listen address must be a unicast IPv6 address".to_owned(),
+                    ));
+                }
+                if ip.is_unicast_link_local() {
+                    return Err(Error::Unsupported(
+                        "listen address must not be link-local".to_owned(),
+                    ));
+                }
+                has_ip6 = true;
+            }
+            Protocol::Tcp(_) => has_tcp = true,
+            _ => {
+                return Err(Error::Unsupported(
+                    "listen must be a /ip6/<address>/tcp/<port> multiaddr".to_owned(),
+                ));
+            }
+        }
+    }
+    if !has_ip6 || !has_tcp {
+        return Err(Error::Unsupported(
+            "listen must be a concrete /ip6/<address>/tcp/<port> multiaddr".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn ensure_ipv6_peer_addr(addr: &Multiaddr) -> Result<()> {
+    let mut has_target = false;
+    for protocol in addr.iter() {
+        match protocol {
+            Protocol::Ip4(_) => {
+                return Err(Error::Unsupported(
+                    "IPv4 is not supported; use an IPv6 or anonymous address".to_owned(),
+                ));
+            }
+            Protocol::Ip6(ip) => {
+                if ip.is_unspecified()
+                    || ip.is_multicast()
+                    || ip.is_unicast_link_local()
+                    || ip.to_ipv4_mapped().is_some()
+                {
+                    return Err(Error::Unsupported(
+                        "peer address must be a global, ULA, or loopback IPv6 address".to_owned(),
+                    ));
+                }
+                has_target = true;
+            }
+            Protocol::Dns(host) | Protocol::Dns4(host) => {
+                if !host.ends_with(".i2p") {
+                    return Err(Error::Unsupported(
+                        "DNS4/DNS clearnet addresses are not supported; use /dns6 or .i2p"
+                            .to_owned(),
+                    ));
+                }
+                has_target = true;
+            }
+            Protocol::Dns6(_) => has_target = true,
+            Protocol::Onion3(_) => has_target = true,
+            _ => {}
+        }
+    }
+    if !has_target {
+        return Err(Error::Unsupported(
+            "address must contain /ip6, /dns6, /onion3, or a .i2p name".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn classify_multiaddr(addr: &Multiaddr) -> Reachability {
     for protocol in addr.iter() {
         match protocol {
-            Protocol::Ip4(ip) => return classify_ipv4(ip),
             Protocol::Ip6(ip) => return classify_ipv6(ip),
             Protocol::Onion3(_) => return Reachability::Tor,
             Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host)
@@ -1754,27 +1769,27 @@ fn classify_multiaddr(addr: &Multiaddr) -> Reachability {
     Reachability::Unknown
 }
 
-fn classify_ipv4(ip: Ipv4Addr) -> Reachability {
-    if ip.is_loopback() {
-        Reachability::Loopback
-    } else if ip.is_unspecified() {
-        Reachability::Unknown
-    } else if ip.is_private() {
-        Reachability::Private
-    } else {
-        Reachability::PublicUnverified
-    }
-}
-
 fn classify_ipv6(ip: Ipv6Addr) -> Reachability {
     if ip.is_loopback() {
         Reachability::Loopback
-    } else if ip.is_unspecified() {
+    } else if ip.is_unspecified() || ip.is_multicast() || ip.to_ipv4_mapped().is_some() {
         Reachability::Unknown
-    } else if ip.is_unique_local() || ip.is_unicast_link_local() {
+    } else if ip.is_unique_local() {
         Reachability::Private
+    } else if ip.is_unicast_link_local() {
+        Reachability::LinkLocal
     } else {
-        Reachability::PublicUnverified
+        let segments = ip.segments();
+        let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+        let benchmarking = segments[0] == 0x2001 && segments[1] == 0x0002;
+        let discard = segments[0] == 0x0100 && segments[1..4] == [0, 0, 0];
+        if documentation || benchmarking || discard {
+            Reachability::Unknown
+        } else if segments[0] & 0xe000 == 0x2000 {
+            Reachability::PublicUnverified
+        } else {
+            Reachability::Unknown
+        }
     }
 }
 
@@ -1792,13 +1807,6 @@ fn is_i2p(addr: &Multiaddr) -> bool {
 
 fn is_relayed(addr: &Multiaddr) -> bool {
     addr.iter().any(|protocol| protocol == Protocol::P2pCircuit)
-}
-
-fn tcp_port(addr: &Multiaddr) -> Option<NonZeroU16> {
-    addr.iter().find_map(|protocol| match protocol {
-        Protocol::Tcp(port) => NonZeroU16::new(port),
-        _ => None,
-    })
 }
 
 fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRecord {
@@ -1835,7 +1843,7 @@ fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
         TransportStatus {
             transport: TransportKind::Tcp,
             available: true,
-            note: "direct TCP + Noise".to_owned(),
+            note: "IPv6 TCP + Noise".to_owned(),
         },
         TransportStatus {
             transport: TransportKind::Relay,
@@ -1846,15 +1854,6 @@ fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
                 "circuit relay v2 client".to_owned()
             } else {
                 "pass --relay or --relay-server to enable".to_owned()
-            },
-        },
-        TransportStatus {
-            transport: TransportKind::PortMapping,
-            available: state.port_mapping,
-            note: if state.port_mapping {
-                "UPnP/NAT-PMP/PCP requested".to_owned()
-            } else {
-                "pass --port-mapping to enable".to_owned()
             },
         },
         TransportStatus {
@@ -1904,11 +1903,9 @@ fn build_network_status(
         peer_id: peer_id.to_string(),
         listen,
         policy: state.connectivity_policy,
-        reachability: state.autonat_reachability.unwrap_or(reachability),
+        reachability,
         transports: transport_statuses(state),
         endpoints,
-        external_endpoint: state.external_endpoint.clone(),
-        port_mapping: state.port_mapping,
         relay_reservation: state.relay_reservation.map(|peer| peer.to_string()),
     }
 }
@@ -2510,23 +2507,37 @@ mod tests {
     }
 
     #[test]
-    fn classifies_loopback_private_and_public_endpoints() {
-        assert_eq!(
-            classify_multiaddr(&"/ip4/127.0.0.1/tcp/4001".parse().unwrap()),
-            Reachability::Loopback
-        );
-        assert_eq!(
-            classify_multiaddr(&"/ip4/192.168.1.10/tcp/4001".parse().unwrap()),
-            Reachability::Private
-        );
-        assert_eq!(
-            classify_multiaddr(&"/ip4/203.0.113.10/tcp/4001".parse().unwrap()),
-            Reachability::PublicUnverified
-        );
+    fn classifies_ipv6_endpoints() {
         assert_eq!(
             classify_multiaddr(&"/ip6/::1/tcp/4001".parse().unwrap()),
             Reachability::Loopback
         );
+        assert_eq!(
+            classify_multiaddr(&"/ip6/fc00::1/tcp/4001".parse().unwrap()),
+            Reachability::Private
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip6/fe80::1/tcp/4001".parse().unwrap()),
+            Reachability::LinkLocal
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip6/2001:db8::1/tcp/4001".parse().unwrap()),
+            Reachability::Unknown
+        );
+        assert_eq!(
+            classify_multiaddr(&"/ip6/2606:4700::1/tcp/4001".parse().unwrap()),
+            Reachability::PublicUnverified
+        );
+    }
+
+    #[test]
+    fn rejects_ipv4_and_unspecified_listen_addresses() {
+        assert!(ensure_ipv6_listen_addr(&"/ip4/127.0.0.1/tcp/4001".parse().unwrap()).is_err());
+        assert!(ensure_ipv6_listen_addr(&"/ip6/::/tcp/4001".parse().unwrap()).is_err());
+        assert!(ensure_ipv6_peer_addr(&"/ip4/127.0.0.1/tcp/4001".parse().unwrap()).is_err());
+        assert!(ensure_ipv6_peer_addr(&"/ip6/::/tcp/4001".parse().unwrap()).is_err());
+        assert!(ensure_ipv6_listen_addr(&"/ip6/::1/tcp/4001".parse().unwrap()).is_ok());
+        assert!(ensure_ipv6_peer_addr(&"/ip6/2606:4700::1/tcp/4001".parse().unwrap()).is_ok());
     }
 
     #[test]

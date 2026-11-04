@@ -10,7 +10,7 @@ async fn dht_publishes_and_fetches_manifest() {
 
     let (publisher, publisher_addr) = spawn(
         &publisher_identity,
-        Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>().unwrap()),
+        Some("/ip6/::1/tcp/0".parse::<Multiaddr>().unwrap()),
     )
     .await
     .expect("publisher starts");
@@ -18,7 +18,7 @@ async fn dht_publishes_and_fetches_manifest() {
 
     let (reader, reader_addr) = spawn(
         &reader_identity,
-        Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>().unwrap()),
+        Some("/ip6/::1/tcp/0".parse::<Multiaddr>().unwrap()),
     )
     .await
     .expect("reader starts");

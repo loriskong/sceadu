@@ -8,7 +8,7 @@ async fn two_nodes_exchange_manifests_and_echo() {
 
     let (server, server_addr) = spawn(
         &server_identity,
-        Some("/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>().unwrap()),
+        Some("/ip6/::1/tcp/0".parse::<Multiaddr>().unwrap()),
     )
     .await
     .expect("server starts");

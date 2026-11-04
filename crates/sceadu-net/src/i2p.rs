@@ -5,7 +5,7 @@
 
 use std::future::Ready;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV6};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -22,11 +22,11 @@ type I2pDial = BoxFuture<'static, Result<Compat<TcpStream>, io::Error>>;
 /// Dial-only transport for `/dns4/<name>.i2p/...` multiaddresses.
 #[derive(Clone)]
 pub struct I2pTransport {
-    proxy: Option<SocketAddr>,
+    proxy: Option<SocketAddrV6>,
 }
 
 impl I2pTransport {
-    pub fn new(proxy: Option<SocketAddr>) -> Self {
+    pub fn new(proxy: Option<SocketAddrV6>) -> Self {
         Self { proxy }
     }
 }
@@ -63,7 +63,7 @@ impl Transport for I2pTransport {
         })?;
 
         Ok(Box::pin(async move {
-            let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
+            let stream = Socks5Stream::connect(SocketAddr::V6(proxy), (host.as_str(), port))
                 .await
                 .map_err(|error| io::Error::other(error.to_string()))?;
             Ok(stream.into_inner().compat())

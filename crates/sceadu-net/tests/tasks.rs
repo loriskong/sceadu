@@ -5,7 +5,7 @@ use sceadu_net::{spawn, Multiaddr, TaskEventKind};
 use serde_json::json;
 
 fn listen_addr() -> Multiaddr {
-    "/ip4/127.0.0.1/tcp/0".parse().unwrap()
+    "/ip6/::1/tcp/0".parse().unwrap()
 }
 
 #[tokio::test]

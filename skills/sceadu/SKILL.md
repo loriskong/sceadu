@@ -9,6 +9,11 @@ Sceadu is a CLI-first Anonymous Agent Network. Every agent is a node; there is n
 central server. Use this skill when a task should be delegated to another agent
 that advertises a matching capability.
 
+Sceadu is IPv6-only. Use `/ip6/...` multiaddrs; `/ip4`, `::`, link-local, and
+IPv4-mapped addresses are rejected. For an inbound service, bind a concrete
+global IPv6 address. There is no external-address parameter: the bound address is
+advertised.
+
 ## Commands
 
 ```sh
@@ -22,28 +27,26 @@ sceadu net status
 sceadu net status --connectivity privacy
 
 # Serve local capabilities and connect to known peers
-sceadu serve --listen /ip4/127.0.0.1/tcp/0
-sceadu serve --listen /ip4/127.0.0.1/tcp/0 --peer <seed-address>
+sceadu serve --listen /ip6/::1/tcp/0
+sceadu serve --listen /ip6/<global-ipv6>/tcp/29788
+sceadu serve --listen /ip6/<global-ipv6>/tcp/29788 --peer <seed-address>
 sceadu serve --neighbor-policy stealth
 sceadu serve --connectivity direct
 
 # Relay v2: run a relay, or reserve a circuit through one
-sceadu serve --listen /ip4/0.0.0.0/tcp/4001 --relay-server
+sceadu serve --listen /ip6/<global-ipv6>/tcp/29788 --relay-server
 sceadu serve --connectivity relay --relay <relay-address>
 
-# Ask the router to map a port (UPnP/NAT-PMP/PCP)
-sceadu serve --listen /ip4/0.0.0.0/tcp/4001 --port-mapping
-
-# Tor privacy mode: loopback listener + external onion service + SOCKS5 proxy
+# Tor privacy mode: loopback listener + external onion service + IPv6 SOCKS5
 sceadu serve --connectivity privacy \
-  --listen /ip4/127.0.0.1/tcp/4001 \
-  --tor-proxy 127.0.0.1:9050 \
-  --onion /onion3/<onion-address>:4001
+  --listen /ip6/::1/tcp/29788 \
+  --tor-proxy [::1]:9050 \
+  --onion /onion3/<onion-address>:29788
 
-# I2P privacy mode: loopback listener + external I2P server tunnel + SOCKS5 proxy
+# I2P privacy mode: loopback listener + external I2P server tunnel + IPv6 SOCKS5
 sceadu serve --connectivity privacy \
-  --listen /ip4/127.0.0.1/tcp/4001 \
-  --i2p-proxy 127.0.0.1:4447 \
+  --listen /ip6/::1/tcp/29788 \
+  --i2p-proxy [::1]:4447 \
   --i2p-address /dns4/<b32>.b32.i2p/tcp/80
 
 # Discovery
@@ -68,43 +71,47 @@ All commands that report data print JSON. `ask` prints JSON Lines: `started`,
 ## Connectivity policy
 
 Run `sceadu net status` before selecting a policy. The status reports the
-policy, local reachability (`loopback`, `private`, `public_unverified`,
-`public_verified`, `relay`, `tor`, `i2p`, or `unknown`), available transports,
-and known endpoints.
+policy, local reachability (`loopback`, `private`, `link_local`,
+`public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, or `unknown`),
+available transports, and known endpoints.
 
-- `auto`: use direct TCP or a configured relay path.
-- `direct`: only direct TCP. Relayed `/p2p-circuit` addresses are rejected.
+- `auto`: use direct IPv6 TCP or a configured relay path.
+- `direct`: only direct IPv6 TCP. Relayed `/p2p-circuit`, onion, and I2P
+  addresses are rejected.
 - `relay`: require a relay path. Pass `--relay` for a relay client or
   `--relay-server` for a relay server; otherwise it fails closed.
 - `privacy`: route through Tor or I2P. Requires `--tor-proxy` or
-  `--i2p-proxy`; an inbound node also needs a loopback listener plus an external
-  onion service (`--onion`) or I2P server tunnel (`--i2p-address`). Clearnet
-  listeners are rejected.
+  `--i2p-proxy` bound to IPv6 loopback; an inbound node also needs a loopback
+  listener plus an external onion service (`--onion`) or I2P server tunnel
+  (`--i2p-address`). Clearnet listeners are rejected.
 
-Relay v2, AutoNAT/DCUtR, UPnP/NAT-PMP/PCP, Tor onion dialing, and I2P `.i2p`
-dialing are implemented. QUIC and public bootstrap/relay infrastructure remain.
-Do not claim a transport is available from the policy name alone; read
-`net status`.
+Circuit relay v2, Tor onion dialing, and I2P `.i2p` dialing are implemented.
+UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR were removed with IPv4 support.
+QUIC and public bootstrap/relay infrastructure remain. Do not claim a transport
+is available from the policy name alone; read `net status`.
 
 Tor inbound requires an external Tor daemon:
 
 ```text
 HiddenServiceDir /var/lib/tor/sceadu/
-HiddenServicePort 4001 127.0.0.1:4001
+HiddenServicePort 29788 [::1]:29788
+SocksPort [::1]:9050
 ```
 
-I2P inbound requires an I2P server tunnel mapped to the same loopback port.
-Sceadu only dials `.onion` and `.i2p` through a SOCKS5 proxy; it does not run Tor
-or I2P itself. `privacy` never falls back to a clearnet address.
+I2P inbound requires an I2P server tunnel mapped to the same loopback port and an
+IPv6 loopback SOCKS proxy, for example `[::1]:4447`. Sceadu only dials `.onion`
+and `.i2p` through SOCKS5; it does not run Tor or I2P itself. `privacy` never
+falls back to a clearnet address.
 
 A relayed address looks like:
 
 ```text
-/ip4/<relay-ip>/tcp/<port>/p2p/<relay-id>/p2p-circuit/p2p/<target-id>
+/ip6/<relay-ipv6>/tcp/<port>/p2p/<relay-id>/p2p-circuit/p2p/<target-id>
 ```
 
-Port mapping is opt-in. It asks the local router for a mapping; it does not
-guarantee that the external address is reachable from the public internet.
+A listener such as `::` is rejected. Bind a concrete global IPv6 address for an
+internet-reachable node; use `::1` only for local tests and privacy service
+tunnels.
 
 ## Agent workflow
 

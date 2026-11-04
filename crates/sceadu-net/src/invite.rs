@@ -32,6 +32,7 @@ pub struct InviteTicket {
 
 impl InviteTicket {
     pub fn issue(identity: &Identity, seed: Multiaddr, ttl_seconds: u64) -> Result<Self, Error> {
+        crate::ensure_ipv6_peer_addr(&seed)?;
         let issued_at = now_unix();
         let mut nonce = [0u8; 16];
         OsRng.fill_bytes(&mut nonce);
@@ -84,10 +85,13 @@ impl InviteTicket {
     }
 
     pub fn seed(&self) -> Result<Multiaddr, Error> {
-        self.body
+        let seed = self
+            .body
             .seed
             .parse()
-            .map_err(|error| Error::Invite(format!("invalid seed multiaddr: {error}")))
+            .map_err(|error| Error::Invite(format!("invalid seed multiaddr: {error}")))?;
+        crate::ensure_ipv6_peer_addr(&seed)?;
+        Ok(seed)
     }
 
     pub fn issuer(&self) -> &AgentId {
@@ -136,7 +140,7 @@ mod tests {
     use super::*;
 
     fn seed_addr() -> Multiaddr {
-        "/ip4/127.0.0.1/tcp/4001".parse().unwrap()
+        "/ip6/::1/tcp/4001".parse().unwrap()
     }
 
     #[test]
@@ -154,7 +158,7 @@ mod tests {
     fn rejects_tampered_body() {
         let identity = Identity::generate();
         let mut ticket = InviteTicket::issue(&identity, seed_addr(), 3600).unwrap();
-        ticket.body.seed = "/ip4/127.0.0.1/tcp/9999".to_owned();
+        ticket.body.seed = "/ip6/::1/tcp/9999".to_owned();
 
         assert!(ticket.verify().is_err());
     }

@@ -7,7 +7,7 @@ use sceadu_net::{
 };
 
 fn listen_addr() -> Multiaddr {
-    "/ip4/127.0.0.1/tcp/0".parse().unwrap()
+    "/ip6/::1/tcp/0".parse().unwrap()
 }
 
 #[tokio::test]
@@ -56,7 +56,7 @@ async fn privacy_policy_blocks_direct_dial() {
         None,
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            tor_proxy: Some("[::1]:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -77,7 +77,7 @@ async fn privacy_policy_rejects_cleartext_listener() {
         Some(listen_addr()),
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            tor_proxy: Some("[::1]:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -149,30 +149,6 @@ async fn relay_circuit_connects_two_peers() {
 }
 
 #[tokio::test]
-async fn port_mapping_is_reported_as_requested() {
-    let identity = Identity::generate();
-    let (node, _) = spawn_with_config(
-        &identity,
-        Some(listen_addr()),
-        NodeConfig {
-            port_mapping: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    let status = node.network_status().await.unwrap();
-    assert!(status.port_mapping);
-    assert!(status
-        .transports
-        .iter()
-        .any(|transport| transport.transport == TransportKind::PortMapping && transport.available));
-
-    node.shutdown().await;
-}
-
-#[tokio::test]
 async fn privacy_status_reports_tor_available() {
     let identity = Identity::generate();
     let (node, _) = spawn_with_config(
@@ -180,7 +156,7 @@ async fn privacy_status_reports_tor_available() {
         None,
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            tor_proxy: Some("[::1]:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -205,7 +181,7 @@ async fn privacy_loopback_listener_requires_onion() {
         Some(listen_addr()),
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            tor_proxy: Some("[::1]:9050".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -233,7 +209,7 @@ async fn privacy_manifest_advertises_only_the_onion_endpoint() {
         Some(listen_addr()),
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            tor_proxy: Some("127.0.0.1:9050".parse().unwrap()),
+            tor_proxy: Some("[::1]:9050".parse().unwrap()),
             onion: Some(onion.clone()),
             ..Default::default()
         },
@@ -306,7 +282,7 @@ async fn handle_socks5(mut socket: tokio::net::TcpStream, target: std::net::Sock
 #[tokio::test]
 async fn privacy_tor_transport_dials_through_socks() {
     use data_encoding::BASE32_NOPAD;
-    use std::net::SocketAddr;
+    use std::net::{Ipv6Addr, SocketAddr};
 
     let server_identity = Identity::generate();
     let client_identity = Identity::generate();
@@ -321,10 +297,13 @@ async fn privacy_tor_transport_dials_through_socks() {
             _ => None,
         })
         .unwrap();
-    let target = SocketAddr::from(([127, 0, 0, 1], port));
+    let target = SocketAddr::from((Ipv6Addr::LOCALHOST, port));
 
-    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let proxy_addr = proxy_listener.local_addr().unwrap();
+    let proxy_listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
+    let proxy_addr = match proxy_listener.local_addr().unwrap() {
+        SocketAddr::V6(address) => address,
+        _ => unreachable!("IPv6 proxy listener"),
+    };
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = proxy_listener.accept().await else {
@@ -366,7 +345,7 @@ async fn privacy_tor_transport_dials_through_socks() {
 
 #[tokio::test]
 async fn privacy_i2p_transport_dials_through_socks() {
-    use std::net::SocketAddr;
+    use std::net::{Ipv6Addr, SocketAddr};
 
     let server_identity = Identity::generate();
     let client_identity = Identity::generate();
@@ -381,10 +360,13 @@ async fn privacy_i2p_transport_dials_through_socks() {
             _ => None,
         })
         .unwrap();
-    let target = SocketAddr::from(([127, 0, 0, 1], port));
+    let target = SocketAddr::from((Ipv6Addr::LOCALHOST, port));
 
-    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let proxy_addr = proxy_listener.local_addr().unwrap();
+    let proxy_listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
+    let proxy_addr = match proxy_listener.local_addr().unwrap() {
+        SocketAddr::V6(address) => address,
+        _ => unreachable!("IPv6 proxy listener"),
+    };
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = proxy_listener.accept().await else {
@@ -426,7 +408,7 @@ async fn privacy_status_reports_i2p_available() {
         None,
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            i2p_proxy: Some("127.0.0.1:4447".parse().unwrap()),
+            i2p_proxy: Some("[::1]:4447".parse().unwrap()),
             ..Default::default()
         },
     )
@@ -452,7 +434,7 @@ async fn privacy_manifest_advertises_only_the_i2p_endpoint() {
         Some(listen_addr()),
         NodeConfig {
             connectivity_policy: ConnectivityPolicy::Privacy,
-            i2p_proxy: Some("127.0.0.1:4447".parse().unwrap()),
+            i2p_proxy: Some("[::1]:4447".parse().unwrap()),
             i2p_address: Some(i2p.clone()),
             ..Default::default()
         },

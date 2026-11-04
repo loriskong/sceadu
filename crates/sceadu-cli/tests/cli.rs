@@ -169,3 +169,78 @@ fn net_status_reports_tcp_transport() {
         .iter()
         .any(|transport| transport["transport"] == "tcp" && transport["available"] == true));
 }
+
+#[test]
+fn net_status_rejects_ipv4_and_unspecified_listen() {
+    let directory = TempDir::new().unwrap();
+    let init = run_json(&directory, "correct horse battery staple", &["init"]);
+    assert!(init.status.success());
+
+    let passphrase_file =
+        write_passphrase(&directory, "passphrase.txt", "correct horse battery staple");
+    let identity_path = directory.path().join("identity.json");
+    for listen in ["/ip4/127.0.0.1/tcp/0", "/ip6/::/tcp/0"] {
+        let mut command = Command::cargo_bin("sceadu").unwrap();
+        let output = command
+            .args([
+                "--path",
+                identity_path.to_str().unwrap(),
+                "--passphrase-file",
+                passphrase_file.as_str(),
+                "net",
+                "status",
+                "--listen",
+                listen,
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "accepted {listen}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("IPv4") || stderr.contains("concrete IPv6"),
+            "unexpected error for {listen}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn manifest_rejects_ipv4_endpoint_and_accepts_ipv6() {
+    let directory = TempDir::new().unwrap();
+    let init = run_json(&directory, "correct horse battery staple", &["init"]);
+    assert!(init.status.success());
+
+    let passphrase_file =
+        write_passphrase(&directory, "passphrase.txt", "correct horse battery staple");
+    let identity_path = directory.path().join("identity.json");
+    let mut bad = Command::cargo_bin("sceadu").unwrap();
+    let bad_output = bad
+        .args([
+            "--path",
+            identity_path.to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_file.as_str(),
+            "manifest",
+            "--endpoint",
+            "/ip4/127.0.0.1/tcp/4001",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad_output.status.success());
+    assert!(String::from_utf8_lossy(&bad_output.stderr).contains("IPv4"));
+
+    let mut good = Command::cargo_bin("sceadu").unwrap();
+    let good_output = good
+        .args([
+            "--path",
+            identity_path.to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_file.as_str(),
+            "manifest",
+            "--endpoint",
+            "/ip6/::1/tcp/4001",
+        ])
+        .output()
+        .unwrap();
+    let manifest = parse_json(&good_output);
+    assert_eq!(manifest["body"]["endpoints"][0], "/ip6/::1/tcp/4001");
+}

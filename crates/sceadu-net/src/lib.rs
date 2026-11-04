@@ -1257,79 +1257,66 @@ fn handle_task_start(
 }
 
 fn handle_task_ready(
-    swarm: &mut Swarm<Behaviour>,
     peer: PeerId,
     task_id: String,
     state: &mut NodeState,
-) -> RpcResponse {
+) -> (RpcResponse, Vec<(u64, TaskEventKind)>) {
     let Some(task) = state.incoming_tasks.remove(&task_id) else {
-        return task_error("unknown task");
+        return (task_error("unknown task"), Vec::new());
     };
     if task.peer != peer {
-        return task_error("task peer mismatch");
+        return (task_error("task peer mismatch"), Vec::new());
     }
-
     if task.deadline_at <= now_unix() {
-        send_task_event(
-            swarm,
-            peer,
-            &task_id,
-            1,
-            TaskEventKind::Failed {
-                message: "task deadline expired".to_owned(),
-            },
+        return (
+            RpcResponse::TaskReadyAck { task_id },
+            vec![
+                (
+                    1,
+                    TaskEventKind::Failed {
+                        message: "task deadline expired".to_owned(),
+                    },
+                ),
+                (2, TaskEventKind::Done),
+            ],
         );
-        send_task_event(swarm, peer, &task_id, 2, TaskEventKind::Done);
-        return RpcResponse::TaskReadyAck { task_id };
     }
 
-    match task.capability.as_str() {
-        "task.echo" => {
-            send_task_event(
-                swarm,
-                peer,
-                &task_id,
+    let events = match task.capability.as_str() {
+        "task.echo" => vec![
+            (
                 1,
                 TaskEventKind::Started {
                     capability: task.capability.clone(),
                 },
-            );
-            send_task_event(
-                swarm,
-                peer,
-                &task_id,
+            ),
+            (
                 2,
                 TaskEventKind::Progress {
                     message: "processing".to_owned(),
                     fraction: Some(0.5),
                 },
-            );
-            send_task_event(
-                swarm,
-                peer,
-                &task_id,
+            ),
+            (
                 3,
                 TaskEventKind::Result {
                     output: serde_json::json!({ "echo": task.input }),
                 },
-            );
-            send_task_event(swarm, peer, &task_id, 4, TaskEventKind::Done);
-        }
-        _ => {
-            send_task_event(
-                swarm,
-                peer,
-                &task_id,
+            ),
+            (4, TaskEventKind::Done),
+        ],
+        _ => vec![
+            (
                 1,
                 TaskEventKind::Failed {
                     message: "no local handler for capability".to_owned(),
                 },
-            );
-            send_task_event(swarm, peer, &task_id, 2, TaskEventKind::Done);
-        }
-    }
+            ),
+            (2, TaskEventKind::Done),
+        ],
+    };
 
-    RpcResponse::TaskReadyAck { task_id }
+    (RpcResponse::TaskReadyAck { task_id }, events)
 }
 
 fn handle_task_event(
@@ -1393,6 +1380,7 @@ fn respond_to_request(
     state: &mut NodeState,
     config: &NodeConfig,
 ) {
+    let mut followup: Vec<(PeerId, String, u64, TaskEventKind)> = Vec::new();
     let response = match request {
         RpcRequest::Manifest(manifest) => match verify_manifest_for_peer(&manifest, &peer) {
             Ok(()) => {
@@ -1444,7 +1432,14 @@ fn respond_to_request(
             local_manifest,
             state,
         ),
-        RpcRequest::TaskReady { task_id } => handle_task_ready(swarm, peer, task_id, state),
+        RpcRequest::TaskReady { task_id } => {
+            let events_task_id = task_id.clone();
+            let (response, events) = handle_task_ready(peer, task_id, state);
+            for (sequence, event) in events {
+                followup.push((peer, events_task_id.clone(), sequence, event));
+            }
+            response
+        }
         RpcRequest::TaskEventPush {
             task_id,
             sequence,
@@ -1453,6 +1448,9 @@ fn respond_to_request(
     };
 
     let _ = swarm.behaviour_mut().rpc.send_response(channel, response);
+    for (peer, task_id, sequence, event) in followup {
+        send_task_event(swarm, peer, &task_id, sequence, event);
+    }
 }
 
 fn handle_response(

@@ -2395,6 +2395,12 @@ fn now_unix() -> u64 {
 
 fn verify_manifest_for_peer(manifest: &Manifest, peer: &PeerId) -> Result<()> {
     manifest.verify()?;
+    for endpoint in &manifest.body.endpoints {
+        let address = endpoint
+            .parse::<Multiaddr>()
+            .map_err(|error| Error::Unsupported(format!("invalid manifest endpoint: {error}")))?;
+        ensure_ipv6_peer_addr(&address)?;
+    }
     let expected = peer_id_for_agent_id(&manifest.body.agent_id)?;
     if &expected != peer {
         return Err(Error::PeerMismatch {

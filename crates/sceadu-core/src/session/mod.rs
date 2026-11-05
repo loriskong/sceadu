@@ -1,5 +1,15 @@
 //! L3 session: request/response and task wire protocol.
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("request error: {0}")]
+    Request(String),
+    #[error("session closed")]
+    Closed,
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 use crate::identity::{ContactRecord, Manifest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{AgentId, Error, Identity};
+use super::Error;
+use crate::{AgentId, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::Signature;
@@ -30,7 +31,7 @@ pub struct InviteTicket {
 
 impl InviteTicket {
     pub fn issue(identity: &Identity, seed: Multiaddr, ttl_seconds: u64) -> Result<Self, Error> {
-        crate::ensure_ipv6_peer_addr(&seed)?;
+        crate::ensure_ipv6_peer_addr(&seed).map_err(|error| Error::Invite(error.to_string()))?;
         let issued_at = now_unix();
         let mut nonce = [0u8; 16];
         OsRng.fill_bytes(&mut nonce);
@@ -88,7 +89,7 @@ impl InviteTicket {
             .seed
             .parse()
             .map_err(|error| Error::Invite(format!("invalid seed multiaddr: {error}")))?;
-        crate::ensure_ipv6_peer_addr(&seed)?;
+        crate::ensure_ipv6_peer_addr(&seed).map_err(|error| Error::Invite(error.to_string()))?;
         Ok(seed)
     }
 

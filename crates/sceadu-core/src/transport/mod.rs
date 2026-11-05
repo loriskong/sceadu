@@ -6,7 +6,21 @@ use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, PeerId, Result};
+use crate::PeerId;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
+    #[error("Tor plugin unavailable: {0}")]
+    TorUnavailable(String),
+    #[error("invalid address: {0}")]
+    InvalidAddress(String),
+    #[error("transport error: {0}")]
+    Other(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub mod tor;
 

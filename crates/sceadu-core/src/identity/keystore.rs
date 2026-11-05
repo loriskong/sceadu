@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use zeroize::Zeroize;
 
+use super::Error;
 use crate::identity::{AgentId, Identity};
-use crate::Error;
 
 const KEYSTORE_VERSION: u32 = 1;
 const AAD_PREFIX: &[u8] = b"sceadu-keystore-v1";

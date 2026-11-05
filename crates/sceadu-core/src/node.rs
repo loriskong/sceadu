@@ -589,7 +589,7 @@ pub async fn spawn_with_config(
     }
     let mut seed = identity.to_seed();
     let keypair = Keypair::ed25519_from_bytes(&mut seed.expose()[..])
-        .map_err(|error| Error::Identity(error.to_string()))?;
+        .map_err(|error| Error::IdentityMessage(error.to_string()))?;
     let peer_id = keypair.public().to_peer_id();
     let onion = config
         .transport
@@ -614,7 +614,7 @@ pub async fn spawn_with_config(
             libp2p::noise::Config::new,
             libp2p::yamux::Config::default,
         )
-        .map_err(|error| Error::Transport(error.to_string()))?
+        .map_err(|error| Error::Transport(crate::transport::Error::Other(error.to_string())))?
         .with_other_transport(move |key| {
             let noise =
                 libp2p::noise::Config::new(key).expect("generated ed25519 key is valid for Noise");
@@ -624,9 +624,9 @@ pub async fn spawn_with_config(
                 .multiplex(libp2p::yamux::Config::default())
                 .boxed()
         })
-        .map_err(|error| Error::Transport(error.to_string()))?
+        .map_err(|error| Error::Transport(crate::transport::Error::Other(error.to_string())))?
         .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)
-        .map_err(|error| Error::Transport(error.to_string()))?
+        .map_err(|error| Error::Transport(crate::transport::Error::Other(error.to_string())))?
         .with_behaviour(move |key, relay_client| {
             let peer_id = key.public().to_peer_id();
             let mut kad = libp2p::kad::Behaviour::new(peer_id, MemoryStore::new(peer_id));
@@ -1496,7 +1496,7 @@ fn handle_command(
                 state.tor_enabled,
                 &addr,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             let peer = match peer_from_multiaddr(&addr) {
@@ -1539,7 +1539,7 @@ fn handle_command(
                 state.relay_server,
                 state.tor_enabled,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             let request_id = swarm.behaviour_mut().rpc.send_request(
@@ -1560,7 +1560,7 @@ fn handle_command(
                 state.relay_server,
                 state.tor_enabled,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             let request_id = swarm
@@ -1583,7 +1583,7 @@ fn handle_command(
                 state.relay_server,
                 state.tor_enabled,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             if source_is_quarantined(state, &peer) {
@@ -1699,7 +1699,7 @@ fn handle_command(
                 state.relay_server,
                 state.tor_enabled,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             if swarm.is_connected(&peer) {
@@ -1729,7 +1729,7 @@ fn handle_command(
                 state.relay_server,
                 state.tor_enabled,
             ) {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
             let (events, receiver) = mpsc::channel(32);
@@ -1932,7 +1932,7 @@ fn verify_manifest_for_peer(manifest: &Manifest, peer: &PeerId) -> Result<()> {
 
 fn peer_id_for_agent_id(agent_id: &AgentId) -> Result<PeerId> {
     let public = libp2p::identity::ed25519::PublicKey::try_from_bytes(agent_id.as_bytes())
-        .map_err(|error| Error::Identity(error.to_string()))?;
+        .map_err(|error| Error::IdentityMessage(error.to_string()))?;
     Ok(PeerId::from_public_key(&libp2p::identity::PublicKey::from(
         public,
     )))

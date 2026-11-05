@@ -5,8 +5,8 @@ use base64::Engine;
 use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 
+use super::Error;
 use crate::identity::{AgentId, Identity};
-use crate::Error;
 
 /// Current manifest wire version.
 pub const MANIFEST_VERSION: u32 = 1;

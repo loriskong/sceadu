@@ -24,43 +24,15 @@ pub use transport::{
     NetworkStatus, Reachability, TransportKind, TransportStatus,
 };
 
-/// Errors returned by the core types.
+/// Errors returned by the composition root and its layers.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid agent id")]
-    InvalidAgentId,
-    #[error("invalid signature encoding")]
-    InvalidSignatureEncoding,
-    #[error("signature verification failed")]
-    InvalidSignature,
-    #[error("manifest expired")]
-    Expired,
-    #[error("manifest is not yet valid")]
-    NotYetValid,
-    #[error("unsupported manifest version {0}")]
-    UnsupportedVersion(u32),
-    #[error("manifest agent id does not match the signing identity")]
-    AgentIdMismatch,
-    #[error("serialization error: {0}")]
-    Serialization(String),
-    #[error("keystore already exists")]
-    KeystoreExists,
-    #[error("keystore not found")]
-    KeystoreNotFound,
-    #[error("keystore format error: {0}")]
-    KeystoreFormat(String),
-    #[error("keystore unlock failed")]
-    KeystoreUnlockFailed,
-    #[error("unsupported keystore version {0}")]
-    KeystoreVersion(u32),
-    #[error("keystore I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("home directory not found")]
-    HomeNotFound,
     #[error("identity error: {0}")]
-    Identity(String),
+    Identity(#[from] identity::Error),
+    #[error("identity error: {0}")]
+    IdentityMessage(String),
     #[error("transport error: {0}")]
-    Transport(String),
+    Transport(#[from] transport::Error),
     #[error("behaviour error: {0}")]
     Behaviour(String),
     #[error("listen error: {0}")]
@@ -73,6 +45,14 @@ pub enum Error {
     PeerMismatch { expected: String, actual: String },
     #[error("DHT error: {0}")]
     Dht(String),
+    #[error("serialization error: {0}")]
+    Serialization(String),
+    #[error("discovery error: {0}")]
+    Discovery(#[from] discovery::Error),
+    #[error("session error: {0}")]
+    Session(#[from] session::Error),
+    #[error("agent error: {0}")]
+    Agent(#[from] agent::Error),
     #[error("invite error: {0}")]
     Invite(String),
     #[error("Tor plugin unavailable: {0}")]

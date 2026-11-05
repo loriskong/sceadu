@@ -1,5 +1,13 @@
 //! L4 agent protocol: task orchestration and public task handle.
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("agent task error: {0}")]
+    Task(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 use tokio::sync::mpsc;
 
 use crate::session::TaskEvent;

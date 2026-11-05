@@ -6,7 +6,7 @@ use rand_core::OsRng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::Zeroize;
 
-use crate::Error;
+use super::Error;
 
 /// Prefix used by the self-certifying agent identifier.
 pub const AGENT_ID_PREFIX: &str = "aan:";

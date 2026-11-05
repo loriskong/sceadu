@@ -3,7 +3,7 @@
 //! M1c scope: one TCP + Noise connection, signed manifest exchange, and an
 //! echo RPC over a libp2p request/response stream.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -369,6 +369,12 @@ struct IncomingTask {
     deadline_at: u64,
 }
 
+struct OutgoingTask {
+    peer: PeerId,
+    events: VecDeque<(u64, TaskEventKind)>,
+    in_flight: Option<(OutboundRequestId, u64, TaskEventKind, u8)>,
+}
+
 #[derive(Default)]
 struct AddressBook {
     endpoints: HashMap<String, EndpointRecord>,
@@ -400,6 +406,8 @@ struct NodeState {
     pending_asks: HashMap<OutboundRequestId, PendingAsk>,
     active_tasks: HashMap<String, ActiveTask>,
     incoming_tasks: HashMap<String, IncomingTask>,
+    outgoing_tasks: HashMap<String, OutgoingTask>,
+    pending_event_sends: HashMap<OutboundRequestId, String>,
     manifests: HashMap<PeerId, Manifest>,
     pending_dials: HashMap<PeerId, oneshot::Sender<Result<PeerId>>>,
     pending_manifests: HashMap<OutboundRequestId, oneshot::Sender<Result<Manifest>>>,
@@ -1188,6 +1196,9 @@ fn handle_rpc_event(
                 record_source_failure(state, &peer);
                 let _ = reply.send(Err(Error::Request(message)));
             }
+            if let Some(task_id) = state.pending_event_sends.remove(&request_id) {
+                retry_or_advance_task_event(swarm, state, &task_id, true);
+            }
         }
         _ => {}
     }
@@ -1348,21 +1359,85 @@ fn handle_task_event(
     RpcResponse::TaskEventAck { task_id, sequence }
 }
 
-fn send_task_event(
-    swarm: &mut Swarm<Behaviour>,
-    peer: PeerId,
-    task_id: &str,
-    sequence: u64,
-    event: TaskEventKind,
-) {
-    let _ = swarm.behaviour_mut().rpc.send_request(
+fn send_next_task_event(swarm: &mut Swarm<Behaviour>, state: &mut NodeState, task_id: &str) {
+    let (peer, sequence, event) = {
+        let Some(task) = state.outgoing_tasks.get_mut(task_id) else {
+            return;
+        };
+        if task.in_flight.is_some() {
+            return;
+        }
+        let Some((sequence, event)) = task.events.pop_front() else {
+            state.outgoing_tasks.remove(task_id);
+            return;
+        };
+        (task.peer, sequence, event)
+    };
+
+    let request_id = swarm.behaviour_mut().rpc.send_request(
         &peer,
         RpcRequest::TaskEventPush {
             task_id: task_id.to_owned(),
             sequence,
-            event,
+            event: event.clone(),
         },
     );
+    state
+        .pending_event_sends
+        .insert(request_id, task_id.to_owned());
+    if let Some(task) = state.outgoing_tasks.get_mut(task_id) {
+        task.in_flight = Some((request_id, sequence, event, 0));
+    }
+}
+
+fn retry_or_advance_task_event(
+    swarm: &mut Swarm<Behaviour>,
+    state: &mut NodeState,
+    task_id: &str,
+    failed: bool,
+) {
+    let retry = {
+        let Some(task) = state.outgoing_tasks.get_mut(task_id) else {
+            return;
+        };
+        let Some((_, sequence, event, attempts)) = task.in_flight.take() else {
+            return;
+        };
+        if failed && attempts < 3 {
+            Some((task.peer, sequence, event, attempts + 1))
+        } else {
+            None
+        }
+    };
+
+    if let Some((peer, sequence, event, attempts)) = retry {
+        let request_id = swarm.behaviour_mut().rpc.send_request(
+            &peer,
+            RpcRequest::TaskEventPush {
+                task_id: task_id.to_owned(),
+                sequence,
+                event: event.clone(),
+            },
+        );
+        state
+            .pending_event_sends
+            .insert(request_id, task_id.to_owned());
+        if let Some(task) = state.outgoing_tasks.get_mut(task_id) {
+            task.in_flight = Some((request_id, sequence, event, attempts));
+        }
+        return;
+    }
+
+    let empty = state
+        .outgoing_tasks
+        .get(task_id)
+        .map(|task| task.events.is_empty())
+        .unwrap_or(true);
+    if empty {
+        state.outgoing_tasks.remove(task_id);
+    } else {
+        send_next_task_event(swarm, state, task_id);
+    }
 }
 
 fn new_task_id() -> String {
@@ -1448,8 +1523,22 @@ fn respond_to_request(
     };
 
     let _ = swarm.behaviour_mut().rpc.send_response(channel, response);
-    for (peer, task_id, sequence, event) in followup {
-        send_task_event(swarm, peer, &task_id, sequence, event);
+    if let Some((peer, task_id, _, _)) = followup.first() {
+        let peer = *peer;
+        let task_id = task_id.clone();
+        let events = followup
+            .into_iter()
+            .map(|(_, _, sequence, event)| (sequence, event))
+            .collect();
+        state.outgoing_tasks.insert(
+            task_id.clone(),
+            OutgoingTask {
+                peer,
+                events,
+                in_flight: None,
+            },
+        );
+        send_next_task_event(swarm, state, &task_id);
     }
 }
 
@@ -1460,6 +1549,11 @@ fn handle_response(
     response: RpcResponse,
     state: &mut NodeState,
 ) {
+    if let Some(task_id) = state.pending_event_sends.remove(&request_id) {
+        retry_or_advance_task_event(swarm, state, &task_id, false);
+        return;
+    }
+
     if let Some(pending) = state.pending_asks.remove(&request_id) {
         let PendingAsk {
             task_id: expected_task_id,

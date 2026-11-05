@@ -131,6 +131,9 @@ enum Command {
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
+        /// DHT peer to publish this node's manifest and provider record to.
+        #[arg(long = "publish-peer")]
+        publish_peers: Vec<Multiaddr>,
     },
     /// Inspect local connectivity policy and transports.
     Net {
@@ -303,6 +306,7 @@ async fn main() -> Result<()> {
             i2p_proxy,
             i2p_address,
             peers,
+            publish_peers,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             let policy = parse_neighbor_policy(&neighbor_policy)?;
@@ -348,6 +352,22 @@ async fn main() -> Result<()> {
                 }));
             }
 
+            let mut published = Vec::new();
+            for peer_addr in publish_peers {
+                let peer = node
+                    .dial(peer_addr.clone())
+                    .await
+                    .with_context(|| format!("failed to dial publish peer {}", peer_addr))?;
+                node.add_address(peer, peer_addr.clone()).await?;
+                node.bootstrap().await?;
+                node.publish().await?;
+                node.provide("task.echo").await?;
+                published.push(json!({
+                    "peer": peer.to_string(),
+                    "dht_peer": peer_addr.to_string(),
+                }));
+            }
+
             print_json(&json!({
                 "agent_id": node.agent_id().to_string(),
                 "peer_id": node.peer_id().to_string(),
@@ -361,6 +381,7 @@ async fn main() -> Result<()> {
                 "i2p_proxy": i2p_proxy.map(|proxy| proxy.to_string()),
                 "i2p_address": i2p_address.as_ref().map(|addr| addr.to_string()),
                 "peers": bootstrapped,
+                "published": published,
                 "note": "press Ctrl-C to stop"
             }))?;
 

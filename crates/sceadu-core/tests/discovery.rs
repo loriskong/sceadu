@@ -1,5 +1,7 @@
 use sceadu_core::Identity;
-use sceadu_net::{spawn, spawn_with_config, Multiaddr, NeighborPolicy, NodeConfig};
+use sceadu_core::{
+    spawn, spawn_with_config, DiscoveryConfig, Multiaddr, NeighborPolicy, NodeConfig,
+};
 
 fn listen_addr() -> Multiaddr {
     "/ip6/::1/tcp/0".parse().unwrap()
@@ -68,7 +70,9 @@ async fn stealth_policy_returns_no_neighbors() {
         &b_identity,
         Some(listen_addr()),
         NodeConfig {
-            neighbor_policy: NeighborPolicy::Stealth,
+            discovery: DiscoveryConfig {
+                neighbor_policy: NeighborPolicy::Stealth,
+            },
             ..Default::default()
         },
     )

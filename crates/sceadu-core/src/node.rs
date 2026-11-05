@@ -4,9 +4,20 @@
 //! echo RPC over a libp2p request/response stream.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::SocketAddrV6;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::agent::TaskHandle;
+use crate::discovery::{capability_key, manifest_key, validate_contacts, NeighborPolicy};
+use crate::identity::ContactRecord;
+use crate::session::{RpcRequest, RpcResponse, TaskEvent, TaskEventKind, PROTOCOL};
+use crate::transport::tor::TorTransport;
+use crate::transport::{
+    classify_multiaddr, endpoint_record, ensure_dial_allowed, ensure_ipv6_listen_addr,
+    ensure_ipv6_peer_addr, ensure_operation_allowed, ensure_peer_id, is_onion, ConnectivityPolicy,
+    EndpointRecord, NetworkStatus, Reachability, TransportKind, TransportStatus,
+};
+use crate::{AgentId, Capability, Error, Identity, Manifest, ManifestBody, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use futures::StreamExt;
@@ -14,9 +25,7 @@ use libp2p::core::upgrade::Version;
 use libp2p::core::Transport;
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
-use libp2p::kad::{
-    self, GetProvidersOk, GetRecordOk, QueryId, QueryResult, Quorum, Record, RecordKey,
-};
+use libp2p::kad::{self, GetProvidersOk, GetRecordOk, QueryId, QueryResult, Quorum, Record};
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::{
     self, Message, OutboundRequestId, ProtocolSupport, ResponseChannel,
@@ -26,21 +35,10 @@ use libp2p::swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 pub use libp2p::{Multiaddr, PeerId};
 use rand_core::{OsRng, RngCore};
-use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-pub mod i2p;
-pub mod invite;
-pub mod tor;
-pub use i2p::I2pTransport;
-pub use invite::InviteTicket;
-pub use tor::TorTransport;
-
-const PROTOCOL: &str = "/sceadu/rpc/1.0.0";
 const MANIFEST_TTL_SECONDS: u64 = 3600;
 const QUARANTINE_FAILURES: u32 = 3;
 const QUARANTINE_DURATION: Duration = Duration::from_secs(60);
@@ -55,233 +53,9 @@ struct Behaviour {
     relay_server: Toggle<libp2p::relay::Behaviour>,
 }
 
-/// Errors returned by the network layer.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("core error: {0}")]
-    Core(#[from] sceadu_core::Error),
-    #[error("identity error: {0}")]
-    Identity(String),
-    #[error("transport error: {0}")]
-    Transport(String),
-    #[error("behaviour error: {0}")]
-    Behaviour(String),
-    #[error("listen error: {0}")]
-    Listen(String),
-    #[error("dial error: {0}")]
-    Dial(String),
-    #[error("request error: {0}")]
-    Request(String),
-    #[error("peer mismatch: expected {expected}, got {actual}")]
-    PeerMismatch { expected: String, actual: String },
-    #[error("DHT error: {0}")]
-    Dht(String),
-    #[error("serialization error: {0}")]
-    Serialization(String),
-    #[error("invite error: {0}")]
-    Invite(String),
-    #[error("unsupported operation: {0}")]
-    Unsupported(String),
-    #[error("node task stopped")]
-    Closed,
-}
-
-/// Result type used by the network layer.
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum RpcRequest {
-    Manifest(Box<Manifest>),
-    Echo {
-        message: String,
-    },
-    Neighbors {
-        capability: Option<String>,
-        max: u32,
-        nonce: u64,
-    },
-    TaskStart {
-        task_id: String,
-        capability: String,
-        input: Value,
-        deadline_at: u64,
-    },
-    TaskReady {
-        task_id: String,
-    },
-    TaskEventPush {
-        task_id: String,
-        sequence: u64,
-        event: TaskEventKind,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum RpcResponse {
-    Manifest(Box<Manifest>),
-    Echo {
-        message: String,
-    },
-    Neighbors {
-        records: Vec<ContactRecord>,
-        nonce: u64,
-        policy: String,
-    },
-    TaskAccepted {
-        task_id: String,
-    },
-    TaskReadyAck {
-        task_id: String,
-    },
-    TaskEventAck {
-        task_id: String,
-        sequence: u64,
-    },
-    Error {
-        message: String,
-    },
-}
-
-/// A signed manifest observed during discovery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContactRecord {
-    pub manifest: Manifest,
-    pub observed_at: u64,
-}
-
-/// How a node answers neighbor queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NeighborPolicy {
-    /// Return verified manifests from the local peer cache.
-    #[default]
-    Open,
-    /// Return no manifests.
-    Stealth,
-}
-
-impl NeighborPolicy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Stealth => "stealth",
-        }
-    }
-}
-
-/// How a node chooses a network path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ConnectivityPolicy {
-    /// Try direct TCP, then future fallbacks.
-    #[default]
-    Auto,
-    /// Use only direct TCP addresses.
-    Direct,
-    /// Require a relay path.
-    Relay,
-    /// Require an anonymizing transport (Tor or I2P).
-    Privacy,
-}
-
-impl ConnectivityPolicy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Direct => "direct",
-            Self::Relay => "relay",
-            Self::Privacy => "privacy",
-        }
-    }
-}
-
-/// Transport names used in status and future manifests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportKind {
-    Tcp,
-    Relay,
-    Tor,
-    #[serde(rename = "i2p")]
-    I2P,
-}
-
-impl TransportKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Tcp => "tcp",
-            Self::Relay => "relay",
-            Self::Tor => "tor",
-            Self::I2P => "i2p",
-        }
-    }
-}
-
-/// Locally observed reachability classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Reachability {
-    Loopback,
-    Private,
-    LinkLocal,
-    PublicUnverified,
-    PublicVerified,
-    Relay,
-    Tor,
-    I2P,
-    Unknown,
-}
-
-impl Reachability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Loopback => "loopback",
-            Self::Private => "private",
-            Self::LinkLocal => "link_local",
-            Self::PublicUnverified => "public_unverified",
-            Self::PublicVerified => "public_verified",
-            Self::Relay => "relay",
-            Self::Tor => "tor",
-            Self::I2P => "i2p",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
-/// One endpoint known to the local address book.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EndpointRecord {
-    pub addr: String,
-    pub transport: TransportKind,
-    pub reachability: Reachability,
-    pub source: String,
-    pub verified: bool,
-}
-
-/// Availability of a transport in this build.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportStatus {
-    pub transport: TransportKind,
-    pub available: bool,
-    pub note: String,
-}
-
-/// A snapshot of local connectivity facts for an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkStatus {
-    pub agent_id: String,
-    pub peer_id: String,
-    pub listen: Option<String>,
-    pub policy: ConnectivityPolicy,
-    pub reachability: Reachability,
-    pub transports: Vec<TransportStatus>,
-    pub endpoints: Vec<EndpointRecord>,
-    pub relay_reservation: Option<String>,
-}
-
-/// Node behavior configuration.
-#[derive(Debug, Clone, Default)]
-pub struct NodeConfig {
-    pub neighbor_policy: NeighborPolicy,
+/// L1 transport configuration.
+#[derive(Debug, Clone)]
+pub struct TransportConfig {
     pub connectivity_policy: ConnectivityPolicy,
     /// Optional relay peer to reserve a circuit with.
     pub relay: Option<Multiaddr>,
@@ -291,50 +65,65 @@ pub struct NodeConfig {
     pub tor_proxy: Option<SocketAddrV6>,
     /// External onion endpoint advertised by this node.
     pub onion: Option<Multiaddr>,
-    /// SOCKS5 proxy used for I2P dialing.
-    pub i2p_proxy: Option<SocketAddrV6>,
-    /// External I2P endpoint advertised by this node.
-    pub i2p_address: Option<Multiaddr>,
 }
 
-/// One event in a remote task stream.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskEventKind {
-    Started {
-        capability: String,
-    },
-    Progress {
-        message: String,
-        fraction: Option<f64>,
-    },
-    Result {
-        output: Value,
-    },
-    Failed {
-        message: String,
-    },
-    Done,
-}
-
-/// A sequenced task event sent by a remote agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskEvent {
-    pub task_id: String,
-    pub sequence: u64,
-    pub event: TaskEventKind,
-}
-
-/// A handle to an in-flight task. Events arrive in sequence order.
-pub struct TaskHandle {
-    pub task_id: String,
-    events: mpsc::Receiver<TaskEvent>,
-}
-
-impl TaskHandle {
-    pub async fn next(&mut self) -> Option<TaskEvent> {
-        self.events.recv().await
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            connectivity_policy: ConnectivityPolicy::Auto,
+            relay: None,
+            relay_server: false,
+            tor_proxy: None,
+            onion: None,
+        }
     }
+}
+
+/// L2 discovery configuration.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryConfig {
+    pub neighbor_policy: NeighborPolicy,
+}
+
+/// L3 session configuration.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    pub idle_connection_timeout: Duration,
+    pub dial_timeout: Duration,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            idle_connection_timeout: Duration::from_secs(60),
+            dial_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// L4 agent protocol configuration.
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub manifest_ttl: u64,
+    pub default_capability: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            manifest_ttl: MANIFEST_TTL_SECONDS,
+            default_capability: "task.echo".to_owned(),
+        }
+    }
+}
+
+/// Composition-root configuration.
+#[derive(Debug, Clone, Default)]
+pub struct NodeConfig {
+    pub transport: TransportConfig,
+    pub discovery: DiscoveryConfig,
+    pub session: SessionConfig,
+    pub agent: AgentConfig,
 }
 
 type PendingNeighbors = (
@@ -401,7 +190,6 @@ struct NodeState {
     relay_enabled: bool,
     relay_server: bool,
     tor_enabled: bool,
-    i2p_enabled: bool,
     relay_reservation: Option<PeerId>,
     pending_asks: HashMap<OutboundRequestId, PendingAsk>,
     active_tasks: HashMap<String, ActiveTask>,
@@ -737,73 +525,61 @@ pub async fn spawn_with_config(
     if let Some(listen) = &listen {
         ensure_ipv6_listen_addr(listen)?;
     }
-    if let Some(relay) = &config.relay {
+    if let Some(relay) = &config.transport.relay {
         ensure_ipv6_peer_addr(relay)?;
     }
-    match config.connectivity_policy {
+    match config.transport.connectivity_policy {
         ConnectivityPolicy::Privacy => {
-            if config.tor_proxy.is_none() && config.i2p_proxy.is_none() {
-                return Err(Error::Unsupported(
-                    "privacy policy requires --tor-proxy or --i2p-proxy".to_owned(),
+            if config.transport.tor_proxy.is_none() {
+                return Err(Error::TorUnavailable(
+                    "privacy policy requires --tor-proxy; install/run the Tor daemon and provide its SOCKS5 proxy".to_owned(),
                 ));
             }
-            if let Some(onion) = &config.onion {
+            if let Some(onion) = &config.transport.onion {
                 if !is_onion(onion) {
                     return Err(Error::Unsupported(
                         "--onion must be an /onion3/... address".to_owned(),
                     ));
                 }
-                if config.tor_proxy.is_none() {
-                    return Err(Error::Unsupported(
-                        "--onion requires --tor-proxy".to_owned(),
-                    ));
-                }
-            }
-            if let Some(i2p) = &config.i2p_address {
-                if !is_i2p(i2p) {
-                    return Err(Error::Unsupported(
-                        "--i2p-address must be a .i2p DNS address".to_owned(),
-                    ));
-                }
-                if config.i2p_proxy.is_none() {
-                    return Err(Error::Unsupported(
-                        "--i2p-address requires --i2p-proxy".to_owned(),
+                if config.transport.tor_proxy.is_none() {
+                    return Err(Error::TorUnavailable(
+                        "--onion requires --tor-proxy (Tor plugin)".to_owned(),
                     ));
                 }
             }
             if let Some(listen) = &listen {
                 if classify_multiaddr(listen) != Reachability::Loopback {
                     return Err(Error::Unsupported(
-                        "privacy listener must be loopback; publish a Tor/I2P service to it"
+                        "privacy listener must be loopback; publish a Tor onion service to it"
                             .to_owned(),
                     ));
                 }
-                if config.onion.is_none() && config.i2p_address.is_none() {
+                if config.transport.onion.is_none() {
                     return Err(Error::Unsupported(
-                        "privacy listener requires --onion or --i2p-address".to_owned(),
+                        "privacy listener requires --onion".to_owned(),
                     ));
                 }
             }
         }
         ConnectivityPolicy::Relay => {
-            if config.relay.is_none() && !config.relay_server {
+            if config.transport.relay.is_none() && !config.transport.relay_server {
                 return Err(Error::Unsupported(
                     "relay policy requires --relay or --relay-server".to_owned(),
                 ));
             }
-            if !config.relay_server && listen.is_some() {
+            if !config.transport.relay_server && listen.is_some() {
                 return Err(Error::Unsupported(
                     "relay client policy must not open a direct listener".to_owned(),
                 ));
             }
-            if config.relay_server && listen.is_none() {
+            if config.transport.relay_server && listen.is_none() {
                 return Err(Error::Unsupported(
                     "relay server requires a direct listen address".to_owned(),
                 ));
             }
         }
         ConnectivityPolicy::Direct => {
-            if config.relay.is_some() || config.relay_server {
+            if config.transport.relay.is_some() || config.transport.relay_server {
                 return Err(Error::Unsupported(
                     "direct policy does not allow relay configuration".to_owned(),
                 ));
@@ -816,15 +592,12 @@ pub async fn spawn_with_config(
         .map_err(|error| Error::Identity(error.to_string()))?;
     let peer_id = keypair.public().to_peer_id();
     let onion = config
+        .transport
         .onion
         .as_ref()
         .map(|address| ensure_peer_id(address.clone(), peer_id));
-    let i2p = config
-        .i2p_address
-        .as_ref()
-        .map(|address| ensure_peer_id(address.clone(), peer_id));
-
-    let relay_server = if config.relay_server {
+    let idle_timeout = config.session.idle_connection_timeout;
+    let relay_server = if config.transport.relay_server {
         let mut behaviour =
             libp2p::relay::Behaviour::new(peer_id, libp2p::relay::Config::default());
         behaviour.set_status(Some(libp2p::relay::Status::Enable));
@@ -833,8 +606,7 @@ pub async fn spawn_with_config(
         None
     };
 
-    let tor_proxy = config.tor_proxy;
-    let i2p_proxy = config.i2p_proxy;
+    let tor_proxy = config.transport.tor_proxy;
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_tcp(
@@ -846,8 +618,7 @@ pub async fn spawn_with_config(
         .with_other_transport(move |key| {
             let noise =
                 libp2p::noise::Config::new(key).expect("generated ed25519 key is valid for Noise");
-            crate::tor::TorTransport::new(tor_proxy)
-                .or_transport(crate::i2p::I2pTransport::new(i2p_proxy))
+            TorTransport::new(tor_proxy)
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise)
                 .multiplex(libp2p::yamux::Config::default())
@@ -868,10 +639,10 @@ pub async fn spawn_with_config(
             }
         })
         .map_err(|error| Error::Behaviour(error.to_string()))?
-        .with_swarm_config(|config| config.with_idle_connection_timeout(Duration::from_secs(60)))
+        .with_swarm_config(|swarm_config| swarm_config.with_idle_connection_timeout(idle_timeout))
         .build();
 
-    let relay_target = config.relay.as_ref().map(|relay| {
+    let relay_target = config.transport.relay.as_ref().map(|relay| {
         if relay
             .iter()
             .any(|protocol| protocol == Protocol::P2pCircuit)
@@ -881,14 +652,14 @@ pub async fn spawn_with_config(
             relay.clone().with(Protocol::P2pCircuit)
         }
     });
-    if let Some(relay) = config.relay.as_ref() {
+    if let Some(relay) = config.transport.relay.as_ref() {
         if let Some(relay_peer) = peer_from_multiaddr(relay) {
             if !swarm.is_connected(&relay_peer) {
                 swarm
                     .dial(relay.clone())
                     .map_err(|error| Error::Dial(error.to_string()))?;
                 tokio::time::timeout(
-                    Duration::from_secs(5),
+                    config.session.dial_timeout,
                     wait_for_connection(&mut swarm, relay_peer),
                 )
                 .await
@@ -919,7 +690,7 @@ pub async fn spawn_with_config(
         Some(ensure_peer_id(address, peer_id))
     };
 
-    if config.relay_server {
+    if config.transport.relay_server {
         if let Some(address) = &listen_addr {
             swarm.add_external_address(address.clone());
         }
@@ -927,18 +698,12 @@ pub async fn spawn_with_config(
     if let Some(onion) = &onion {
         swarm.add_external_address(onion.clone());
     }
-    if let Some(i2p) = &i2p {
-        swarm.add_external_address(i2p.clone());
-    }
 
     let mut body = ManifestBody::new(identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
     body.capabilities.push(Capability::new("task.echo"));
-    if config.connectivity_policy == ConnectivityPolicy::Privacy {
+    if config.transport.connectivity_policy == ConnectivityPolicy::Privacy {
         if let Some(onion) = &onion {
             body.endpoints.push(onion.to_string());
-        }
-        if let Some(i2p) = &i2p {
-            body.endpoints.push(i2p.to_string());
         }
     } else if let Some(address) = &listen_addr {
         body.endpoints.push(address.to_string());
@@ -952,20 +717,11 @@ pub async fn spawn_with_config(
             body.endpoints.push(onion.to_string());
         }
     }
-    if let Some(i2p) = &i2p {
-        if !body
-            .endpoints
-            .iter()
-            .any(|endpoint| endpoint == &i2p.to_string())
-        {
-            body.endpoints.push(i2p.to_string());
-        }
-    }
     body.protocols.push(PROTOCOL.to_owned());
     let local_manifest = Manifest::sign(body, identity)?;
 
-    let advertised_addr = if config.connectivity_policy == ConnectivityPolicy::Privacy {
-        onion.clone().or_else(|| i2p.clone())
+    let advertised_addr = if config.transport.connectivity_policy == ConnectivityPolicy::Privacy {
+        onion.clone()
     } else {
         listen_addr.clone()
     };
@@ -1026,12 +782,15 @@ async fn run_node(
     config: NodeConfig,
 ) {
     let mut state = NodeState {
-        connectivity_policy: config.connectivity_policy,
-        relay_enabled: config.relay.is_some(),
-        relay_server: config.relay_server,
-        tor_enabled: config.tor_proxy.is_some(),
-        i2p_enabled: config.i2p_proxy.is_some(),
-        relay_reservation: config.relay.as_ref().and_then(peer_from_multiaddr),
+        connectivity_policy: config.transport.connectivity_policy,
+        relay_enabled: config.transport.relay.is_some(),
+        relay_server: config.transport.relay_server,
+        tor_enabled: config.transport.tor_proxy.is_some(),
+        relay_reservation: config
+            .transport
+            .relay
+            .as_ref()
+            .and_then(peer_from_multiaddr),
         ..Default::default()
     };
 
@@ -1104,10 +863,7 @@ fn handle_event(
             state
                 .address_book
                 .upsert(endpoint_record(&address, "listen", false));
-            if state.connectivity_policy != ConnectivityPolicy::Privacy
-                || is_onion(&address)
-                || is_i2p(&address)
-            {
+            if state.connectivity_policy != ConnectivityPolicy::Privacy || is_onion(&address) {
                 add_manifest_endpoint(local_manifest, identity, &address);
             }
         }
@@ -1115,10 +871,7 @@ fn handle_event(
             state
                 .address_book
                 .upsert(endpoint_record(&address, "external", false));
-            if state.connectivity_policy != ConnectivityPolicy::Privacy
-                || is_onion(&address)
-                || is_i2p(&address)
-            {
+            if state.connectivity_policy != ConnectivityPolicy::Privacy || is_onion(&address) {
                 add_manifest_endpoint(local_manifest, identity, &address);
             }
         }
@@ -1224,7 +977,6 @@ fn handle_task_start(
         state.relay_enabled,
         state.relay_server,
         state.tor_enabled,
-        state.i2p_enabled,
     ) {
         return task_error(error.to_string());
     }
@@ -1485,12 +1237,12 @@ fn respond_to_request(
                 &peer,
                 capability.as_deref(),
                 max,
-                config.neighbor_policy,
+                config.discovery.neighbor_policy,
             );
             RpcResponse::Neighbors {
                 records,
                 nonce,
-                policy: config.neighbor_policy.as_str().to_owned(),
+                policy: config.discovery.neighbor_policy.as_str().to_owned(),
             }
         }
         RpcRequest::TaskStart {
@@ -1583,10 +1335,7 @@ fn handle_response(
                         task_id: task_id.clone(),
                     },
                 );
-                Ok(TaskHandle {
-                    task_id,
-                    events: receiver,
-                })
+                Ok(TaskHandle::from_receiver(task_id, receiver))
             }
             RpcResponse::Error { message } => Err(Error::Request(message)),
             _ => Err(Error::Request("unexpected task response".to_owned())),
@@ -1669,267 +1418,6 @@ fn handle_response(
     }
 }
 
-fn ensure_operation_allowed(
-    policy: ConnectivityPolicy,
-    relay_enabled: bool,
-    relay_server: bool,
-    tor_enabled: bool,
-    i2p_enabled: bool,
-) -> Result<()> {
-    match policy {
-        ConnectivityPolicy::Auto | ConnectivityPolicy::Direct => Ok(()),
-        ConnectivityPolicy::Relay if relay_enabled || relay_server => Ok(()),
-        ConnectivityPolicy::Relay => Err(Error::Unsupported(
-            "relay policy requires --relay or --relay-server".to_owned(),
-        )),
-        ConnectivityPolicy::Privacy if tor_enabled || i2p_enabled => Ok(()),
-        ConnectivityPolicy::Privacy => Err(Error::Unsupported(
-            "privacy policy requires --tor-proxy or --i2p-proxy".to_owned(),
-        )),
-    }
-}
-
-fn ensure_dial_allowed(
-    policy: ConnectivityPolicy,
-    relay_enabled: bool,
-    relay_server: bool,
-    tor_enabled: bool,
-    i2p_enabled: bool,
-    addr: &Multiaddr,
-) -> Result<()> {
-    ensure_ipv6_peer_addr(addr)?;
-    match policy {
-        ConnectivityPolicy::Auto => Ok(()),
-        ConnectivityPolicy::Direct => {
-            if is_relayed(addr) || is_onion(addr) || is_i2p(addr) {
-                Err(Error::Unsupported(
-                    "direct policy only allows clearnet TCP addresses".to_owned(),
-                ))
-            } else {
-                Ok(())
-            }
-        }
-        ConnectivityPolicy::Relay => {
-            if !is_relayed(addr) {
-                return Err(Error::Unsupported(
-                    "relay policy requires a /p2p-circuit address".to_owned(),
-                ));
-            }
-            ensure_operation_allowed(
-                policy,
-                relay_enabled,
-                relay_server,
-                tor_enabled,
-                i2p_enabled,
-            )
-        }
-        ConnectivityPolicy::Privacy => {
-            if is_onion(addr) && !tor_enabled {
-                return Err(Error::Unsupported(
-                    "onion address requires --tor-proxy".to_owned(),
-                ));
-            }
-            if is_i2p(addr) && !i2p_enabled {
-                return Err(Error::Unsupported(
-                    "I2P address requires --i2p-proxy".to_owned(),
-                ));
-            }
-            if !is_onion(addr) && !is_i2p(addr) {
-                return Err(Error::Unsupported(
-                    "privacy policy requires an /onion3/ or .i2p address".to_owned(),
-                ));
-            }
-            ensure_operation_allowed(
-                policy,
-                relay_enabled,
-                relay_server,
-                tor_enabled,
-                i2p_enabled,
-            )
-        }
-    }
-}
-
-fn ensure_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
-    if peer_from_multiaddr(&address) == Some(peer_id) {
-        address
-    } else {
-        address.with(Protocol::P2p(peer_id))
-    }
-}
-
-pub fn ensure_ipv6_listen_addr(addr: &Multiaddr) -> Result<()> {
-    let mut has_ip6 = false;
-    let mut has_tcp = false;
-    for protocol in addr.iter() {
-        match protocol {
-            Protocol::Ip4(_) => {
-                return Err(Error::Unsupported(
-                    "IPv4 is not supported; listen on a concrete /ip6 address".to_owned(),
-                ));
-            }
-            Protocol::Ip6(ip) => {
-                if ip.is_unspecified() {
-                    return Err(Error::Unsupported(
-                        "listen address must be a concrete IPv6 address, not ::".to_owned(),
-                    ));
-                }
-                if ip.is_multicast() || ip.to_ipv4_mapped().is_some() {
-                    return Err(Error::Unsupported(
-                        "listen address must be a unicast IPv6 address".to_owned(),
-                    ));
-                }
-                if ip.is_unicast_link_local() {
-                    return Err(Error::Unsupported(
-                        "listen address must not be link-local".to_owned(),
-                    ));
-                }
-                has_ip6 = true;
-            }
-            Protocol::Tcp(_) => has_tcp = true,
-            _ => {
-                return Err(Error::Unsupported(
-                    "listen must be a /ip6/<address>/tcp/<port> multiaddr".to_owned(),
-                ));
-            }
-        }
-    }
-    if !has_ip6 || !has_tcp {
-        return Err(Error::Unsupported(
-            "listen must be a concrete /ip6/<address>/tcp/<port> multiaddr".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-pub fn ensure_ipv6_peer_addr(addr: &Multiaddr) -> Result<()> {
-    let mut has_target = false;
-    for protocol in addr.iter() {
-        match protocol {
-            Protocol::Ip4(_) => {
-                return Err(Error::Unsupported(
-                    "IPv4 is not supported; use an IPv6 or anonymous address".to_owned(),
-                ));
-            }
-            Protocol::Ip6(ip) => {
-                if ip.is_unspecified()
-                    || ip.is_multicast()
-                    || ip.is_unicast_link_local()
-                    || ip.to_ipv4_mapped().is_some()
-                {
-                    return Err(Error::Unsupported(
-                        "peer address must be a global, ULA, or loopback IPv6 address".to_owned(),
-                    ));
-                }
-                has_target = true;
-            }
-            Protocol::Dns(host) | Protocol::Dns4(host) => {
-                if !host.ends_with(".i2p") {
-                    return Err(Error::Unsupported(
-                        "DNS4/DNS clearnet addresses are not supported; use /dns6 or .i2p"
-                            .to_owned(),
-                    ));
-                }
-                has_target = true;
-            }
-            Protocol::Dns6(_) => has_target = true,
-            Protocol::Onion3(_) => has_target = true,
-            _ => {}
-        }
-    }
-    if !has_target {
-        return Err(Error::Unsupported(
-            "address must contain /ip6, /dns6, /onion3, or a .i2p name".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn classify_multiaddr(addr: &Multiaddr) -> Reachability {
-    for protocol in addr.iter() {
-        match protocol {
-            Protocol::Ip6(ip) => return classify_ipv6(ip),
-            Protocol::Onion3(_) => return Reachability::Tor,
-            Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host)
-                if host.ends_with(".i2p") =>
-            {
-                return Reachability::I2P;
-            }
-            _ => {}
-        }
-    }
-    Reachability::Unknown
-}
-
-fn classify_ipv6(ip: Ipv6Addr) -> Reachability {
-    if ip.is_loopback() {
-        Reachability::Loopback
-    } else if ip.is_unspecified() || ip.is_multicast() || ip.to_ipv4_mapped().is_some() {
-        Reachability::Unknown
-    } else if ip.is_unique_local() {
-        Reachability::Private
-    } else if ip.is_unicast_link_local() {
-        Reachability::LinkLocal
-    } else {
-        let segments = ip.segments();
-        let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
-        let benchmarking = segments[0] == 0x2001 && segments[1] == 0x0002;
-        let discard = segments[0] == 0x0100 && segments[1..4] == [0, 0, 0];
-        if documentation || benchmarking || discard {
-            Reachability::Unknown
-        } else if segments[0] & 0xe000 == 0x2000 {
-            Reachability::PublicUnverified
-        } else {
-            Reachability::Unknown
-        }
-    }
-}
-
-fn is_onion(addr: &Multiaddr) -> bool {
-    addr.iter()
-        .any(|protocol| matches!(protocol, Protocol::Onion3(_)))
-}
-
-fn is_i2p(addr: &Multiaddr) -> bool {
-    addr.iter().any(|protocol| match protocol {
-        Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host) => host.ends_with(".i2p"),
-        _ => false,
-    })
-}
-
-fn is_relayed(addr: &Multiaddr) -> bool {
-    addr.iter().any(|protocol| protocol == Protocol::P2pCircuit)
-}
-
-fn endpoint_record(addr: &Multiaddr, source: &str, verified: bool) -> EndpointRecord {
-    let relayed = is_relayed(addr);
-    let onion = is_onion(addr);
-    let i2p = is_i2p(addr);
-    EndpointRecord {
-        addr: addr.to_string(),
-        transport: if relayed {
-            TransportKind::Relay
-        } else if onion {
-            TransportKind::Tor
-        } else if i2p {
-            TransportKind::I2P
-        } else {
-            TransportKind::Tcp
-        },
-        reachability: if relayed {
-            Reachability::Relay
-        } else if onion {
-            Reachability::Tor
-        } else if i2p {
-            Reachability::I2P
-        } else {
-            classify_multiaddr(addr)
-        },
-        source: source.to_owned(),
-        verified,
-    }
-}
-
 fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
     vec![
         TransportStatus {
@@ -1955,15 +1443,6 @@ fn transport_statuses(state: &NodeState) -> Vec<TransportStatus> {
                 "SOCKS5 onion dialing".to_owned()
             } else {
                 "pass --tor-proxy to enable".to_owned()
-            },
-        },
-        TransportStatus {
-            transport: TransportKind::I2P,
-            available: state.i2p_enabled,
-            note: if state.i2p_enabled {
-                "SOCKS5 I2P dialing".to_owned()
-            } else {
-                "pass --i2p-proxy to enable".to_owned()
             },
         },
     ]
@@ -2015,7 +1494,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
                 &addr,
             ) {
                 let _ = reply.send(Err(error));
@@ -2060,7 +1538,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2082,7 +1559,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2106,7 +1582,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2223,7 +1698,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2254,7 +1728,6 @@ fn handle_command(
                 state.relay_enabled,
                 state.relay_server,
                 state.tor_enabled,
-                state.i2p_enabled,
             ) {
                 let _ = reply.send(Err(error));
                 return true;
@@ -2376,17 +1849,6 @@ fn update_found(found: &mut Option<Box<Manifest>>, agent_id: &AgentId, result: &
     }
 }
 
-fn manifest_key(agent_id: &AgentId) -> RecordKey {
-    let digest = Sha256::digest(format!("aan/id/{agent_id}").as_bytes());
-    RecordKey::new(&digest)
-}
-
-fn capability_key(capability: &str) -> RecordKey {
-    let normalized = capability.trim().to_ascii_lowercase();
-    let digest = Sha256::digest(format!("aan/cap/{normalized}").as_bytes());
-    RecordKey::new(&digest)
-}
-
 fn record_source_success(state: &mut NodeState, peer: &PeerId) {
     let stats = state.sources.entry(*peer).or_default();
     stats.failures = 0;
@@ -2441,41 +1903,6 @@ fn answer_neighbors(
             observed_at,
         })
         .collect()
-}
-
-fn validate_contacts(
-    records: Vec<ContactRecord>,
-    capability: Option<&str>,
-    max: u32,
-) -> Vec<ContactRecord> {
-    let limit = max.clamp(1, 32) as usize;
-    let mut seen = HashSet::new();
-    let mut valid = Vec::new();
-
-    for record in records {
-        if valid.len() >= limit {
-            break;
-        }
-        if record.manifest.verify().is_err() {
-            continue;
-        }
-        if let Some(cap) = capability {
-            if !record
-                .manifest
-                .body
-                .capabilities
-                .iter()
-                .any(|capability| capability.id == cap)
-            {
-                continue;
-            }
-        }
-        if seen.insert(record.manifest.body.agent_id.to_string()) {
-            valid.push(record);
-        }
-    }
-
-    valid
 }
 
 fn now_unix() -> u64 {
@@ -2640,32 +2067,12 @@ mod tests {
 
     #[test]
     fn privacy_and_relay_policies_fail_closed() {
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Auto, false, false, false, false).is_ok()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Direct, false, false, false, false)
-                .is_ok()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Relay, false, false, false, false)
-                .is_err()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Relay, true, false, false, false).is_ok()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Privacy, true, true, false, false)
-                .is_err()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, true, false)
-                .is_ok()
-        );
-        assert!(
-            ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, false, true)
-                .is_ok()
-        );
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Auto, false, false, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Direct, false, false, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, false, false, false).is_err());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Relay, true, false, false).is_ok());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Privacy, true, true, false).is_err());
+        assert!(ensure_operation_allowed(ConnectivityPolicy::Privacy, false, false, true).is_ok());
     }
 
     #[test]

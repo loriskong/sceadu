@@ -2969,7 +2969,6 @@ dependencies = [
  "predicates",
  "rpassword",
  "sceadu-core",
- "sceadu-net",
  "serde",
  "serde_json",
  "tempfile",
@@ -2986,34 +2985,20 @@ dependencies = [
  "bs58",
  "chacha20poly1305",
  "ciborium",
- "ed25519-dalek 2.2.0",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "zeroize",
-]
-
-[[package]]
-name = "sceadu-net"
-version = "0.1.0"
-dependencies = [
- "base64",
- "ciborium",
  "data-encoding",
  "ed25519-dalek 2.2.0",
  "futures",
  "libp2p",
  "rand_core 0.6.4",
- "sceadu-core",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-socks",
  "tokio-util",
+ "zeroize",
 ]
 
 [[package]]

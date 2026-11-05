@@ -1,14 +1,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::{AgentId, Error, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::Signature;
 use libp2p::Multiaddr;
 use rand_core::{OsRng, RngCore};
-use sceadu_core::{AgentId, Identity};
 use serde::{Deserialize, Serialize};
-
-use crate::Error;
 
 const INVITE_VERSION: u32 = 1;
 const INVITE_PREFIX: &str = "aan-invite:";

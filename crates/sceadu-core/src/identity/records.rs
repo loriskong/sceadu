@@ -207,3 +207,10 @@ mod tests {
         ));
     }
 }
+
+/// A signed manifest observed during discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactRecord {
+    pub manifest: Manifest,
+    pub observed_at: u64,
+}

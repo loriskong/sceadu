@@ -2,22 +2,22 @@
 
 Sceadu uses IPv6-only peer transport. IPv4 is not accepted in listen, dial,
 relay, manifest endpoint, invite seed, or SOCKS proxy addresses. The transport is
-TCP + Noise + Yamux. Circuit relay v2, Tor onion, and I2P remain available.
+TCP + Noise + Yamux. Circuit relay v2 and the optional Tor onion plugin remain available.
 
 ## Policies
 
 ```text
 auto      use direct IPv6 TCP or a configured relay path
-direct    use only direct IPv6 TCP; reject /p2p-circuit, onion, and I2P
+direct    use only direct IPv6 TCP; reject /p2p-circuit and onion
 relay     require a relay path; requires --relay or --relay-server
-privacy   require Tor or I2P; --tor-proxy/--i2p-proxy, plus an externally
-          configured --onion/--i2p-address for inbound
+privacy   require the optional Tor plugin; --tor-proxy, plus an
+          externally configured --onion for inbound
 ```
 
 A listener must be a concrete `/ip6/<address>/tcp/<port>` multiaddr. `::`,
 link-local, multicast, and IPv4-mapped addresses are rejected. There is no
 external-address parameter: the bound IPv6 address is the advertised address.
-Privacy listeners use `::1`; their public endpoint is the onion or I2P address.
+Privacy listeners use `::1`; their public endpoint is the onion address.
 
 A relay client must not create a direct listener. A relay server must use a
 concrete globally reachable IPv6 listen address. There is no silent downgrade.
@@ -32,7 +32,6 @@ public_unverified global unicast that has not been confirmed
 public_verified   a public address confirmed by a connection
 relay             reached through a relay reservation
 tor               .onion endpoint
-i2p               I2P destination
 unknown           unspecified, multicast, documentation, or unsupported
 ```
 
@@ -43,7 +42,7 @@ Documentation prefixes such as `2001:db8::/32` are not treated as public.
 ```text
 EndpointRecord {
   addr          multiaddr string
-  transport     tcp | relay | tor | i2p
+  transport     tcp | relay | tor
   reachability  see above
   source        listen | external | dial | ...
   verified      whether a connection confirmed the address
@@ -68,8 +67,7 @@ after an endpoint change; callers should publish again.
   "transports": [
     {"transport": "tcp", "available": true, "note": "IPv6 TCP + Noise"},
     {"transport": "relay", "available": false, "note": "pass --relay or --relay-server to enable"},
-    {"transport": "tor", "available": false, "note": "pass --tor-proxy to enable"},
-    {"transport": "i2p", "available": false, "note": "pass --i2p-proxy to enable"}
+    {"transport": "tor", "available": false, "note": "pass --tor-proxy to enable"}
   ],
   "endpoints": [],
   "relay_reservation": null
@@ -85,13 +83,12 @@ Relay server mode uses circuit relay v2. A relay client reserves a circuit and
 listens on `/p2p/<relay>/p2p-circuit/p2p/<self>`. Relay addresses are validated
 as IPv6 and advertised in the signed manifest.
 
-Tor and I2P are dial-only inside Sceadu. `TorTransport` resolves `/onion3` to a
-base32 hostname; `I2pTransport` resolves `/dns4/<name>.i2p` (the I2P naming
-exception). Both connect through a SOCKS5 proxy bound to an IPv6 loopback
-address, for example `[::1]:9050` and `[::1]:4447`. Inbound onion/I2P traffic is
-handled by an external Tor daemon or I2P server tunnel mapping to a loopback
-listener. The signed manifest advertises only the configured onion/I2P endpoint
-in `privacy` mode.
+Tor is a dial-only plugin inside Sceadu. `TorTransport` resolves `/onion3` to a
+base32 hostname and connects through a SOCKS5 proxy bound to an IPv6 loopback
+address, for example `[::1]:9050`. Without `--tor-proxy`, privacy/onion calls
+fail closed. Inbound onion traffic is handled by an external Tor daemon mapping
+to a loopback listener. The signed manifest advertises only the configured onion
+endpoint in `privacy` mode.
 
 ## Security
 
@@ -99,10 +96,10 @@ in `privacy` mode.
 - IPv4 is rejected everywhere in Sceadu configuration and wire-facing address
   handling. The operating system and libp2p dependencies still contain IPv4
   code, but Sceadu does not expose an IPv4 path.
-- Tor/I2P hide the peer IP from the remote Sceadu node, but the local daemon and
+- Tor hides the peer IP from the remote Sceadu node, but the local daemon and
   SOCKS proxy still see local traffic; this is not a guarantee against traffic
   analysis.
 - Relay/TURN see IP and traffic metadata even though task content remains
   end-to-end encrypted.
-- Tor/I2P reduce network-level IP exposure but do not guarantee full anonymity
+- Tor reduces network-level IP exposure but do not guarantee full anonymity
   or traffic-analysis resistance.

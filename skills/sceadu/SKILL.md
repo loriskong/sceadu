@@ -44,12 +44,6 @@ sceadu serve --connectivity privacy \
   --tor-proxy [::1]:9050 \
   --onion /onion3/<onion-address>:29788
 
-# I2P privacy mode: loopback listener + external I2P server tunnel + IPv6 SOCKS5
-sceadu serve --connectivity privacy \
-  --listen /ip6/::1/tcp/29788 \
-  --i2p-proxy [::1]:4447 \
-  --i2p-address /dns4/<b32>.b32.i2p/tcp/80
-
 # Discovery
 sceadu discover --addr <introducer-address> --capability task.echo
 
@@ -73,21 +67,21 @@ All commands that report data print JSON. `ask` prints JSON Lines: `started`,
 
 Run `sceadu net status` before selecting a policy. The status reports the
 policy, local reachability (`loopback`, `private`, `link_local`,
-`public_unverified`, `public_verified`, `relay`, `tor`, `i2p`, or `unknown`),
+`public_unverified`, `public_verified`, `relay`, `tor`, or `unknown`),
 available transports, and known endpoints.
 
 - `auto`: use direct IPv6 TCP or a configured relay path.
-- `direct`: only direct IPv6 TCP. Relayed `/p2p-circuit`, onion, and I2P
-  addresses are rejected.
+- `direct`: only direct IPv6 TCP. Relayed `/p2p-circuit` and onion addresses
+  are rejected.
 - `relay`: require a relay path. Pass `--relay` for a relay client or
   `--relay-server` for a relay server; otherwise it fails closed.
-- `privacy`: route through Tor or I2P. Requires `--tor-proxy` or
-  `--i2p-proxy` bound to IPv6 loopback; an inbound node also needs a loopback
-  listener plus an external onion service (`--onion`) or I2P server tunnel
-  (`--i2p-address`). Clearnet listeners are rejected.
+- `privacy`: route through the optional Tor plugin. Requires `--tor-proxy`
+  bound to IPv6 loopback; an inbound node also needs a loopback listener plus an
+  external onion service (`--onion`). Clearnet listeners are rejected. Without a
+  Tor proxy, privacy calls fail closed.
 
-Circuit relay v2, Tor onion dialing, and I2P `.i2p` dialing are implemented.
-UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR were removed with IPv4 support.
+Circuit relay v2 and optional Tor onion dialing are implemented.
+UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR were removed.
 QUIC and public bootstrap/relay infrastructure remain. Do not claim a transport
 is available from the policy name alone; read `net status`.
 
@@ -99,10 +93,9 @@ HiddenServicePort 29788 [::1]:29788
 SocksPort [::1]:9050
 ```
 
-I2P inbound requires an I2P server tunnel mapped to the same loopback port and an
-IPv6 loopback SOCKS proxy, for example `[::1]:4447`. Sceadu only dials `.onion`
-and `.i2p` through SOCKS5; it does not run Tor or I2P itself. `privacy` never
-falls back to a clearnet address.
+Sceadu only dials `.onion` through SOCKS5; it does not run Tor itself. Without
+`--tor-proxy`, privacy/onion calls fail closed. `privacy` never falls back to a
+clearnet address.
 
 A relayed address looks like:
 

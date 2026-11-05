@@ -1,5 +1,5 @@
 use sceadu_core::Identity;
-use sceadu_net::{spawn, Multiaddr};
+use sceadu_core::{spawn, Multiaddr};
 
 #[tokio::test]
 async fn two_nodes_exchange_manifests_and_echo() {

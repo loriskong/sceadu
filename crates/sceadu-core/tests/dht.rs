@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sceadu_core::Identity;
-use sceadu_net::{spawn, Multiaddr};
+use sceadu_core::{spawn, Multiaddr};
 
 #[tokio::test]
 async fn dht_publishes_and_fetches_manifest() {

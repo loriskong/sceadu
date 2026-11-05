@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sceadu_core::Identity;
-use sceadu_net::{spawn, Multiaddr, TaskEventKind};
+use sceadu_core::{spawn, Multiaddr, TaskEventKind};
 use serde_json::json;
 
 fn listen_addr() -> Multiaddr {

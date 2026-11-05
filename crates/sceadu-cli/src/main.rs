@@ -7,11 +7,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sceadu_core::keystore;
-use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
-use sceadu_net::{
+use sceadu_core::{
     ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, spawn as spawn_node, spawn_with_config,
-    ConnectivityPolicy, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig, TaskEventKind,
+    ConnectivityPolicy, DiscoveryConfig, InviteTicket, Multiaddr, NeighborPolicy, NodeConfig,
+    TaskEventKind, TransportConfig,
 };
+use sceadu_core::{AgentId, Capability, Identity, Manifest, ManifestBody};
 use serde::Serialize;
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -53,12 +54,6 @@ enum NetCommand {
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
-        /// SOCKS5 proxy for I2P dialing.
-        #[arg(long)]
-        i2p_proxy: Option<SocketAddrV6>,
-        /// External I2P endpoint to advertise.
-        #[arg(long)]
-        i2p_address: Option<Multiaddr>,
     },
 }
 
@@ -122,12 +117,6 @@ enum Command {
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
-        /// SOCKS5 proxy for I2P dialing.
-        #[arg(long)]
-        i2p_proxy: Option<SocketAddrV6>,
-        /// External I2P endpoint to advertise.
-        #[arg(long)]
-        i2p_address: Option<Multiaddr>,
         /// Known peer to dial and exchange manifests with at startup.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
@@ -212,9 +201,6 @@ enum Command {
         /// SOCKS5 proxy for Tor onion dialing.
         #[arg(long)]
         tor_proxy: Option<SocketAddrV6>,
-        /// SOCKS5 proxy for I2P dialing.
-        #[arg(long)]
-        i2p_proxy: Option<SocketAddrV6>,
     },
     /// Ask a connected peer for its verified neighbors.
     Discover {
@@ -303,8 +289,6 @@ async fn main() -> Result<()> {
             relay_server,
             tor_proxy,
             onion,
-            i2p_proxy,
-            i2p_address,
             peers,
             publish_peers,
         } => {
@@ -323,14 +307,17 @@ async fn main() -> Result<()> {
                 &identity,
                 listen,
                 NodeConfig {
-                    neighbor_policy: policy,
-                    connectivity_policy,
-                    relay,
-                    relay_server,
-                    tor_proxy,
-                    onion: onion.clone(),
-                    i2p_proxy,
-                    i2p_address: i2p_address.clone(),
+                    transport: TransportConfig {
+                        connectivity_policy,
+                        relay,
+                        relay_server,
+                        tor_proxy,
+                        onion: onion.clone(),
+                    },
+                    discovery: DiscoveryConfig {
+                        neighbor_policy: policy,
+                    },
+                    ..Default::default()
                 },
             )
             .await?;
@@ -378,8 +365,6 @@ async fn main() -> Result<()> {
                 "relay_server": relay_server,
                 "tor_proxy": tor_proxy.map(|proxy| proxy.to_string()),
                 "onion": onion.as_ref().map(|addr| addr.to_string()),
-                "i2p_proxy": i2p_proxy.map(|proxy| proxy.to_string()),
-                "i2p_address": i2p_address.as_ref().map(|addr| addr.to_string()),
                 "peers": bootstrapped,
                 "published": published,
                 "note": "press Ctrl-C to stop"
@@ -413,8 +398,6 @@ async fn main() -> Result<()> {
                 relay_server,
                 tor_proxy,
                 onion,
-                i2p_proxy,
-                i2p_address,
             } => {
                 let identity = load_identity(&cli.path, &cli.passphrase_file)?;
                 let connectivity_policy = parse_connectivity_policy(&connectivity)?;
@@ -435,13 +418,13 @@ async fn main() -> Result<()> {
                     &identity,
                     listen,
                     NodeConfig {
-                        connectivity_policy,
-                        relay,
-                        relay_server,
-                        tor_proxy,
-                        onion,
-                        i2p_proxy,
-                        i2p_address,
+                        transport: TransportConfig {
+                            connectivity_policy,
+                            relay,
+                            relay_server,
+                            tor_proxy,
+                            onion,
+                        },
                         ..Default::default()
                     },
                 )
@@ -572,7 +555,6 @@ async fn main() -> Result<()> {
             connectivity,
             relay,
             tor_proxy,
-            i2p_proxy,
         } => {
             let input: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "invalid --input JSON")?;
@@ -582,10 +564,12 @@ async fn main() -> Result<()> {
                 &identity,
                 None,
                 NodeConfig {
-                    connectivity_policy,
-                    relay,
-                    tor_proxy,
-                    i2p_proxy,
+                    transport: TransportConfig {
+                        connectivity_policy,
+                        relay,
+                        tor_proxy,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )

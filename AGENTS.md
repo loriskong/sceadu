@@ -26,9 +26,9 @@ Current stage: pre-alpha (IPv6-only). M3 is complete and the MCP bridge is defer
 - Rust core and desktop CLI first (Linux, macOS, Windows); mobile companion apps come after MVP.
 - DHT discovery first; agent-mediated neighbor discovery next.
 - No Sybil protection in alpha: invite-only / small networks. Do not add tokens, staking, or PoW silently.
-- Anonymity scope: content confidentiality and pseudonymity by default. Tor/I2P are optional transports that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.
-- Sceadu peer transport is IPv6-only. IPv4 is rejected in listen, dial, relay, manifest endpoint, invite seed, and Tor/I2P SOCKS proxy addresses. A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped addresses are rejected. There is no external-address parameter; the bound IPv6 address is advertised.
-- Connectivity policies: `auto`, `direct`, `relay`, `privacy`. `privacy` never silently falls back to clearnet. `relay` requires `--relay` or `--relay-server`; `direct` rejects `/p2p-circuit`, `/onion3`, and `.i2p` addresses. Tor and I2P use IPv6 SOCKS5 proxies and externally configured services.
+- Anonymity scope: content confidentiality and pseudonymity by default. Tor is an optional transport that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.
+- Sceadu peer transport is IPv6-only. IPv4 is rejected in listen, dial, relay, manifest endpoint, invite seed, and Tor SOCKS proxy addresses. A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped addresses are rejected. There is no external-address parameter; the bound IPv6 address is advertised.
+- Connectivity policies: `auto`, `direct`, `relay`, `privacy`. `privacy` never silently falls back to clearnet. `relay` requires `--relay` or `--relay-server`; `direct` rejects `/p2p-circuit` and `/onion3` addresses. Tor is an optional IPv6 SOCKS5 plugin and requires an externally configured service.
 - UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 is retained for firewall-restricted or non-inbound peers.
 - Out of MVP: mobile apps, mixnet, offline messaging, groups, payments, GUI, key recovery.
 
@@ -74,7 +74,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 - Rust stable, 2021 edition or newer.
 - No custom cryptography. Use audited crates.
 - No plaintext fallback. Fail closed on signature, version, or crypto errors.
-- Keep `sceadu-core` independent of libp2p.
+- L0 identity/records must stay independent of libp2p. libp2p is allowed only in L1 transport and above, inside `sceadu-core`.
 - Wire-format changes require a spec update and test vectors under `spec/`.
 - Never commit secrets, private keys, tokens, or `.design/` content.
 - Prefer small modules with explicit interfaces.
@@ -87,7 +87,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Repository layout
 
-- `crates/` - Rust workspace (`sceadu-core`, `sceadu-net`, `sceadu-cli`)
+- `crates/` - Rust workspace (`sceadu-core`, `sceadu-cli`); `sceadu-core/src` contains `identity`, `transport`, `discovery`, `session`, `agent`, and the `node.rs` composition root
 - `spec/` - wire format and test vectors
 - `skills/sceadu/` - agent skill files
 - `scripts/` - maintenance and CI scripts
@@ -96,4 +96,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1, M2, and M3 are complete. M4a/M4b connectivity is now IPv6-only; port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2, Tor, and I2P remain. Public bootstrap/relay infrastructure and QUIC remain. The MCP bridge remains deferred by explicit user decision; do not add it without a new decision. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+M1, M2, and M3 are complete. M4a/M4b connectivity is now IPv6-only; port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 and the optional Tor plugin remain. Public bootstrap/relay infrastructure and QUIC remain. The MCP bridge remains deferred by explicit user decision; do not add it without a new decision. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.

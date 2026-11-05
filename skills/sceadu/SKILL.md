@@ -30,6 +30,7 @@ sceadu net status --connectivity privacy
 sceadu serve --listen /ip6/::1/tcp/0
 sceadu serve --listen /ip6/<global-ipv6>/tcp/29788
 sceadu serve --listen /ip6/<global-ipv6>/tcp/29788 --peer <seed-address>
+sceadu serve --listen /ip6/<global-ipv6>/tcp/29788 --publish-peer <dht-peer-address>
 sceadu serve --neighbor-policy stealth
 sceadu serve --connectivity direct
 

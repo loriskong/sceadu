@@ -103,6 +103,10 @@ cargo run -p sceadu-cli -- serve --neighbor-policy stealth
 # Start a node and seed it with a known peer.
 cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0 --peer <known-peer-address>
 
+# Start a public IPv6 node and publish its reachable endpoint to a DHT peer.
+cargo run -p sceadu-cli -- serve --listen /ip6/<global-ipv6>/tcp/29788 \
+  --publish-peer <dht-peer-address>
+
 # In another terminal, dial the printed address and echo.
 cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
 

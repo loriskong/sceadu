@@ -1,23 +1,24 @@
 //! Core types for the Sceadu Anonymous Agent Network.
 
 pub mod agent;
+pub mod daemon;
 pub mod discovery;
 pub mod identity;
 pub mod node;
 pub mod session;
 pub mod transport;
 
-pub use agent::TaskHandle;
+pub use agent::{AgentMessage, FilePart, FileRef, Inbox, Part, Role, StoredMessage, TextPart};
 pub use discovery::{InviteTicket, NeighborPolicy};
 pub use identity::keystore;
 pub use identity::{
-    AgentId, Capability, Identity, Manifest, ManifestBody, SecretSeed, MANIFEST_VERSION,
+    AgentId, Identity, Manifest, ManifestBody, SecretSeed, Skill, MANIFEST_VERSION,
 };
 pub use node::{
     spawn, spawn_with_config, AgentConfig, DiscoveryConfig, Multiaddr, NodeConfig, NodeHandle,
     PeerId, SessionConfig, TransportConfig,
 };
-pub use session::{TaskEvent, TaskEventKind};
+
 pub use transport::TorTransport;
 pub use transport::{
     ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, ConnectivityPolicy, EndpointRecord,

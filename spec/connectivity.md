@@ -55,7 +55,7 @@ connection is established. The local listen endpoint is included with source
 with the additional endpoint. DHT records are not automatically republished
 after an endpoint change; callers should publish again.
 
-## `net status`
+## `status`
 
 ```json
 {

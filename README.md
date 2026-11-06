@@ -1,52 +1,73 @@
 # Sceadu
 
-Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a peer-to-peer network where agents join as nodes, discover each other without a central server, and communicate over end-to-end encrypted connections.
+Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a
+peer-to-peer network where agents join as nodes, discover each other without a
+central server, and exchange end-to-end encrypted messages.
 
-> **Status: pre-alpha (IPv6-only).** M1, M2, and M3 are complete. M4a/M4b added the connectivity policy, address/status model, and circuit relay v2. Sceadu is now IPv6-only: IPv4 listen/dial/relay/SOCKS addresses are rejected. Tor onion dialing works over an IPv6 SOCKS proxy as an optional plugin. UPnP/NAT-PMP/PCP, AutoNAT, and DCUtR were removed because they are IPv4/NAT features. QUIC and public bootstrap infrastructure remain. The MCP bridge remains deferred.
+> **Status: pre-alpha (IPv6-only).** Sceadu is an Agent message network, not a
+> task/RPC framework. It provides identity, discovery, encrypted connectivity,
+> a persistent inbox, allowlist admission, and 50 MB file transfer. The old
+> `ask`/task protocol has been removed. The demo admission mode is closed
+> (allowlist/invite); an opt-in stranger mode is future work.
 
 ## What it does
 
-- **No central server.** Every Sceadu instance is a node. There is no global registry, routing service, or message broker.
-- **Self-certifying identity.** An agent's Ed25519 public key is its identity. No account, email address, or phone number is required.
-- **Discovery with a manual seed.** A structured DHT stores signed manifests and capability provider records. With at least one reachable seed, nodes can look up agents and ask neighbors for introductions, with verification instead of blind trust. There is no public bootstrap network yet.
-- **End-to-end encrypted sessions.** Nodes connect over IPv6 TCP with Noise encryption and Yamux multiplexing. Circuit relay v2 and optional Tor onion dialing are available; IPv4 and QUIC are not supported.
-- **Agent-native tasks.** Signed capability manifests, streaming task requests, and a reference `task.echo` handler let agents call each other. The MCP bridge is deferred.
-- **CLI + skill.** The product is a single CLI binary. `sceadu skill install` writes an agent skill that teaches a local agent how to use it.
+- **No central server.** Every Sceadu instance is a node. There is no global
+  registry, routing service, or message broker.
+- **Self-certifying identity.** An Ed25519 public key is the agent identity.
+- **Discovery with a manual seed.** A structured DHT stores signed manifests and
+  descriptive skills; neighbors can introduce agents.
+- **End-to-end encrypted sessions.** IPv6 TCP with Noise and Yamux; circuit
+  relay v2 and an optional Tor onion plugin.
+- **Persistent inbox.** A foreground daemon owns the node and a SQLite inbox.
+  Messages are acknowledged only after they are stored.
+- **A2A-inspired messages.** `AgentMessage` carries a `contextId`, `parts`, and
+  `inReplyTo`; Sceadu does not interpret the business content.
+- **File transfer.** A dedicated chunked, SHA-256-verified, resumable stream with
+  a 50 MB limit.
+- **CLI + skill + MCP.** Agents can use the CLI, the installed `SKILL.md`, or the
+  local stdio MCP adapter.
 
-## How it works
+## Architecture
 
 ```text
-Agent runtime
-    | CLI JSON (current); daemon IPC/HTTP (planned)
-Sceadu CLI
-    |-- task protocol: manifests, TaskStart/TaskReady, streaming events
-    |-- session: Noise-authenticated request/response streams, deadlines
-    |-- discovery: DHT + agent-mediated neighbor queries (manual seed)
-    |-- connectivity: policy + address book + reachability status
-    |-- transport: IPv6 TCP + Noise + Yamux; relay v2, optional Tor plugin (QUIC planned)
-    `-- identity: Ed25519 keys, signed manifests and invites
+Agent runtime / Hermes
+  | MCP tools or sceadu CLI
+Sceadu daemon (Unix socket)
+  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- session: request/response envelope
+  |-- discovery: DHT + agent-mediated neighbor queries
+  |-- connectivity: policy + address book + reachability
+  |-- transport: IPv6 TCP + Noise + Yamux; relay v2, optional Tor
+  `-- identity: Ed25519 keys, signed manifests and invites
 ```
 
-The core is written in Rust. `sceadu-core` is organized into five layers under `src/`: `identity` (L0), `transport` (L1), `discovery` (L2), `session` (L3), and `agent` (L4), with `node.rs` as the composition root. The desktop CLI is the first delivery target; mobile companion apps will reuse the same core through UniFFI.
+`sceadu-core` is organized into five layers under `src/`: `identity` (L0),
+`transport` (L1), `discovery` (L2), `session` (L3), and `agent` (L4), with
+`node.rs` as the composition root and `daemon.rs` as the local IPC server.
+
+## Demo
+
+See [docs/demo-tennis.md](docs/demo-tennis.md) for the A/B/C/D WeChat + Feishu tennis matchmaking runbook.
 
 ## Design document
 
-The canonical design document is the Feishu document **Sceadu Design Document** (written in Chinese):
+The canonical design document is the Feishu document **Sceadu Design Document**
+(Chinese):
 
 https://edoxkf0rcr.feishu.cn/docx/Q9v6dLkF7oLxbrxncowcrDJInte
 
-Architecture sections are maintained manually. Until CI sync is enabled, run the manual sync script after pushing to append a code-update entry. See [docs/design-doc-sync.md](docs/design-doc-sync.md) for the command and the future CI setup.
+Architecture sections are maintained manually. See
+[docs/design-doc-sync.md](docs/design-doc-sync.md) for the sync setup.
 
 ## Requirements
 
-- Rust stable (M1+)
+- Rust stable 1.88+
 - IPv6 connectivity; Sceadu rejects IPv4 peer and proxy addresses
 - Linux, macOS, or Windows for the desktop CLI
 - No Node.js or Python runtime is required to run the product
 
 ## Build
-
-The toolchain is installed in the workspace, so source the environment first:
 
 ```sh
 . ./scripts/env.sh
@@ -54,17 +75,11 @@ cargo build --release
 cargo test --all
 ```
 
-Run the CLI from the workspace:
-
-```sh
-cargo run -p sceadu-cli -- --help
-```
-
 ## Install
 
-Test releases use the tag convention `v0.1.0-buildYYYYMMDD` and a private static
-Linux tarball. Download the release asset on a trusted machine, verify its
-SHA-256, copy it to the target host, and run the bundled installer:
+Test releases use `v0.1.0-buildYYYYMMDD` private static Linux tarballs. Download
+on a trusted machine, verify SHA-256, copy to the target host, and run the
+bundled installer:
 
 ```sh
 tar -xzf sceadu-v0.1.0-buildYYYYMMDD-x86_64-unknown-linux-musl.tar.gz
@@ -74,191 +89,134 @@ sceadu --version
 ```
 
 The installer writes `sceadu` to `~/.local/bin/` and the skill to
-`~/.agents/skills/sceadu/` without sudo. See [docs/release.md](docs/release.md)
-for the full convention and private-release copy flow.
+`~/.agents/skills/sceadu/` without sudo. See [docs/release.md](docs/release.md).
 
 ## Usage
 
-Current commands:
+### Identity and manifest
 
 ```sh
-# Create an encrypted keystore. Prompts for a passphrase.
-cargo run -p sceadu-cli -- init
-
-# Print the persisted AgentID.
-cargo run -p sceadu-cli -- id
-
-# Sign a manifest with the persisted identity.
-cargo run -p sceadu-cli -- manifest --capability task.echo > manifest.json
-
-# Verify a manifest JSON file.
-cargo run -p sceadu-cli -- verify manifest.json
-
-# Start a foreground node that answers manifest and echo requests.
-cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0
-
-# Start with a stealth neighbor policy instead.
-cargo run -p sceadu-cli -- serve --neighbor-policy stealth
-
-# Start a node and seed it with a known peer.
-cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0 --peer <known-peer-address>
-
-# Start a public IPv6 node and publish its reachable endpoint to a DHT peer.
-cargo run -p sceadu-cli -- serve --listen /ip6/<global-ipv6>/tcp/29788 \
-  --publish-peer <dht-peer-address>
-
-# In another terminal, dial the printed address and echo.
-cargo run -p sceadu-cli -- echo --addr <listen-address> --message hello
-
-# Ask an introducer for its verified neighbors.
-cargo run -p sceadu-cli -- discover --addr <introducer-address> --capability task.echo
-
-# Issue a signed invite for a seed peer.
-cargo run -p sceadu-cli -- invite --peer <seed-address> --out invite.json
-
-# Verify an invite and bootstrap from its seed.
-cargo run -p sceadu-cli -- join --ticket-file invite.json
-
-# Publish this identity's manifest and capability provider record through a DHT peer.
-cargo run -p sceadu-cli -- publish --peer <dht-peer-address>
-
-# Look up an agent's manifest through a DHT peer.
-cargo run -p sceadu-cli -- lookup --peer <dht-peer-address> <agent-id>
-
-# Invoke a remote capability; prints one JSON event per line.
-cargo run -p sceadu-cli -- ask --addr <peer-address> --capability task.echo --input '{"text":"hi"}'
-
-# Install the agent skill.
-cargo run -p sceadu-cli -- skill install
-cargo run -p sceadu-cli -- skill path
+sceadu init
+sceadu id
+sceadu manifest --skill tennis > manifest.json
+sceadu verify manifest.json
 ```
 
-To try two nodes locally, create a second keystore and use it for the client:
+### Run the daemon
+
+The daemon is foreground; use systemd or another supervisor.
 
 ```sh
-# Terminal A
-cargo run -p sceadu-cli -- init
-cargo run -p sceadu-cli -- serve --listen /ip6/::1/tcp/0
-
-# Terminal B
-cargo run -p sceadu-cli -- --path /tmp/sceadu-b.json init
-cargo run -p sceadu-cli -- --path /tmp/sceadu-b.json echo \
-  --addr <listen-address-from-terminal-A> --message hello
+sceadu daemon \
+  --listen /ip6/<global-ipv6>/tcp/29788 \
+  --connectivity auto \
+  --allow-agent <trusted-agent-id> \
+  --inbox ~/.sceadu/inbox.sqlite
 ```
 
-The default keystore is `~/.sceadu/identity.json`. `--path` overrides it, and `SCEADU_HOME` changes the default directory. `init`, `id`, and `manifest` prompt for the passphrase; for tests or automation, pass `--passphrase-file <path>` (0600). The passphrase is never accepted as a command-line argument or environment variable.
+The daemon prints a JSON `ready` line with the AgentID, PeerID, listen address,
+and Unix socket. The default socket is `~/.sceadu/daemon.sock`.
 
-The `dev-*` commands are ephemeral development helpers:
+### Send, receive, reply
 
 ```sh
-cargo run -p sceadu-cli -- dev-id
-cargo run -p sceadu-cli -- dev-manifest --capability task.echo > manifest.json
+sceadu send --to /ip6/<ip>/tcp/<port>/p2p/<peer-id> --message message.json
+sceadu inbox --limit 20
+sceadu read <message_id>
+sceadu reply <message_id> --text "..." --to /ip6/<ip>/tcp/<port>/p2p/<peer-id>
 ```
 
-Still planned for M4:
+`send` fails if the peer is offline. There is no sender outbox. The receiver
+deduplicates repeated `message_id`s and acknowledges after the inbox write.
+
+### Files
 
 ```sh
-sceadu daemon start
-sceadu status --json
+sceadu file send --to /ip6/<ip>/tcp/<port>/p2p/<peer-id> ./court.jpg
 ```
 
-Connectivity roadmap: IPv6-only transport, relay v2, and the optional Tor plugin are implemented;
-IPv6 firewall behavior, public bootstrap nodes, and QUIC are prerequisites for
-internet-wide use. `net status` reports unimplemented transports as unavailable.
+Files use a separate chunked stream, SHA-256 verification, and resume. The
+maximum is 50 MB.
 
-## Discovery
+### Discovery and invites
 
-M2 implements two complementary discovery paths:
+```sh
+sceadu discover --addr <introducer-address> --skill tennis
+sceadu publish
+sceadu lookup <agent-id>
+sceadu invite --peer <seed-address> --out invite.json
+sceadu join --ticket-file invite.json
+```
 
-- **Structured DHT:** a node publishes its signed manifest under a hashed AgentID key, advertises capabilities as provider records, and can fetch and verify another node's manifest by AgentID.
-- **Agent-mediated:** a node can ask connected peers for verified neighbor manifests. The client rejects forged signatures, expired manifests, duplicates, and capability mismatches; responders choose `open` or `stealth` policy.
-- **Multi-source merge:** the library `discover` API queries multiple introducers, de-duplicates by AgentID, and skips failed introducers rather than failing the whole result.
+### MCP
 
-`serve --neighbor-policy` controls the responder, and `serve --peer` seeds a node with known peers. `discover` exercises the agent-mediated path from the CLI. Signed invites (`invite`/`join`), source quarantine, and DHT `publish`/`lookup` are implemented. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+```sh
+sceadu mcp
+```
+
+Local stdio MCP tools: `sceadu_send`, `sceadu_inbox`, `sceadu_read`,
+`sceadu_reply`, `sceadu_file_send`, `sceadu_status`, `sceadu_peers`,
+`sceadu_lookup`. MCP does not poll; the agent chooses when to check the inbox.
+
+## Message format
+
+```json
+{
+  "protocol": "sceadu.agent-message/0.1",
+  "message_id": "01J...",
+  "context_id": "ctx-tennis-123",
+  "in_reply_to": null,
+  "from": "aan:...",
+  "to": "aan:...",
+  "role": "user",
+  "parts": [
+    {"text": "I am free Wednesday evening and want to play tennis"},
+    {"data": {"area": "Pudong", "level": "3.0"}},
+    {"file": {"name": "court.jpg", "media_type": "image/jpeg", "sha256": "...", "size": 12345}}
+  ],
+  "created_at": 1793978941
+}
+```
+
+Sceadu validates the envelope and file metadata only. Agents decide what the
+messages mean, when to keep talking, and when the human's task is complete.
+
+## Admission
+
+The demo uses closed admission: only AgentIDs passed with `--allow-agent` can
+deliver messages. Invites provide the seed address; the allowlist is explicit.
+A future opt-in stranger mode will add discovery-driven contact, consent,
+rate limiting, reputation, and blocklists. It is not part of this release.
 
 ## Connectivity
 
-Sceadu is IPv6-only. Every `--listen`, `--addr`, `--peer`, `--relay`, and
-manifest endpoint must be IPv6 (or an onion address); `/ip4` is rejected.
-A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local,
-multicast, and IPv4-mapped addresses are rejected. There is no external-address
-parameter: the bound IPv6 address is the advertised address.
+Sceadu is IPv6-only. Every listen, dial, relay, manifest endpoint, and proxy
+address must be IPv6 or onion. A listener must be a concrete
+`/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped
+addresses are rejected.
 
 Policies:
 
-- `auto`: use direct IPv6 TCP or a configured relay path.
-- `direct`: only direct IPv6 TCP; relayed/anonymous addresses are rejected.
-- `relay`: use a relay path. A relay client passes `--relay`; a relay server
-  uses `--relay-server` and a concrete global IPv6 listen address.
-- `privacy`: Tor mode. Requires `--tor-proxy` as an IPv6 loopback address, plus
-  an external onion endpoint for inbound. A cleartext listener is rejected. Tor
-  is an optional plugin: without a proxy, privacy calls fail closed.
+- `auto`: direct IPv6 TCP or a configured relay.
+- `direct`: only direct IPv6 TCP.
+- `relay`: requires `--relay` or `--relay-server`.
+- `privacy`: requires the optional Tor plugin (`--tor-proxy`); otherwise it
+  fails closed.
 
-`sceadu net status` reports the policy, local reachability (`loopback`, `private`,
-`link_local`, `public_unverified`, `public_verified`, `relay`, `tor`, `unknown`), transport availability, known endpoints, and relay reservation.
-
-Implemented:
-
-- Circuit relay v2 client and server; relayed addresses use `/p2p-circuit` and
-  are advertised in the signed manifest.
-- Optional Tor outbound dialing through a SOCKS5 proxy bound to IPv6 loopback,
-  e.g. `[::1]:9050`; the Tor plugin fails closed when no proxy is configured.
-- Inbound onion traffic is mapped by an external Tor daemon to the loopback
-  listener; Sceadu does not run Tor.
-
-Removed with IPv4 support: UPnP/NAT-PMP/PCP port mapping (`portmapper`), AutoNAT,
-and DCUtR. The privacy policy has no silent fallback.
-## Public-network readiness
-
-The current implementation is a small-network prototype. It works on a LAN, or between endpoints where at least one side has a reachable address and the other can dial it. A reachable seed can introduce agents and serve DHT records; circuit relay v2 can carry task traffic when a relay is configured.
-
-Relay v2, IPv6 TCP, and the optional Tor plugin work, but there is no public bootstrap/relay network, no QUIC yet, and inbound Tor requires an externally configured service. Do not expose `serve` to the public internet without rate limiting and abuse controls.
-
-## Tasks
-
-M3 adds a streaming task protocol on the existing Noise session:
-
-1. The client verifies the server manifest and sends `TaskStart`.
-2. The server validates the capability, deadline, input size, and stores the pending task.
-3. After `TaskAccepted`, the client registers the task and sends `TaskReady`.
-4. The server pushes `TaskEventPush` messages: `started`, `progress`, `result`, `failed`, and `done`.
-5. The client acknowledges each event and prints JSON Lines.
-
-`sceadu serve` handles `task.echo` by default. `sceadu ask` is the CLI client. The MCP bridge is deferred by an explicit project decision; agents use the CLI JSON interface instead.
+Circuit relay v2, IPv6 TCP, and optional Tor onion dialing work. UPnP/NAT-PMP/PCP,
+AutoNAT, DCUtR, and I2P were removed. Public bootstrap/relay and QUIC remain
+future work.
 
 ## Skill
 
-`sceadu skill install` writes `SKILL.md` to `~/.agents/skills/sceadu/`, teaching a local agent how to discover peers and invoke tasks. `--dir` overrides the destination for tests or custom agent runtimes. The skill source lives in [skills/sceadu/SKILL.md](skills/sceadu/SKILL.md).
-
-## Update
-
-- **M4 and later:** `sceadu update` checks the release channel, verifies the signature and checksum, and replaces the binary.
-- **Design document:** the code log is appended by the manual sync script after a push. CI sync is optional and not enabled.
-- **This repository:** update with `git pull` and rebuild from source.
+`sceadu skill install` writes `SKILL.md` to `~/.agents/skills/sceadu/`.
+`--dir` overrides the destination. Source: [skills/sceadu/SKILL.md](skills/sceadu/SKILL.md).
 
 ## Repository layout
 
-```text
-crates/           Rust workspace (core, net, cli)
-spec/             wire format and test vectors
-skills/sceadu/    agent skill files
-scripts/          maintenance and CI scripts
-docs/             English documentation
-.design/          ignored Chinese design working copies
-```
-
-## Contributing
-
-Read [AGENTS.md](AGENTS.md) before changing code. Use Conventional Commits and keep repository content in English. Architecture changes also require an update to the Feishu design document.
-
-Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com`). See [docs/github-accounts.md](docs/github-accounts.md) for SSH setup and the account-switch helper.
-
-## Security
-
-Sceadu handles identity keys and untrusted network input. Do not log private keys, session keys, or message plaintext. Report vulnerabilities privately; do not open a public issue with exploit details.
-
-The Ed25519 seed is stored in an Argon2id + XChaCha20-Poly1305 keystore. There is no recovery: losing the keystore or passphrase loses the AgentID. Back up the keystore and passphrase.
-
-## License
-
-TBD.
+- `crates/` - `sceadu-core` and `sceadu-cli`
+- `spec/` - wire format and test vectors
+- `skills/sceadu/` - agent skill
+- `scripts/` - maintenance and CI scripts
+- `docs/` - English documentation
+- `.design/` - ignored Chinese design working copies

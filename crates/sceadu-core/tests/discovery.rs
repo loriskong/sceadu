@@ -1,7 +1,21 @@
 use sceadu_core::Identity;
 use sceadu_core::{
-    spawn, spawn_with_config, DiscoveryConfig, Multiaddr, NeighborPolicy, NodeConfig,
+    spawn, spawn_with_config, AgentMessage, DiscoveryConfig, Multiaddr, NeighborPolicy, NodeConfig,
+    Part, Role, TextPart,
 };
+
+fn message(from: &Identity, to: &Identity, text: &str) -> AgentMessage {
+    AgentMessage::new(
+        sceadu_core::agent::new_message_id(),
+        sceadu_core::agent::new_context_id(),
+        from.agent_id().to_string(),
+        to.agent_id().to_string(),
+        Role::User,
+        vec![Part::Text(TextPart {
+            text: text.to_owned(),
+        })],
+    )
+}
 
 fn listen_addr() -> Multiaddr {
     "/ip6/::1/tcp/0".parse().unwrap()
@@ -29,7 +43,7 @@ async fn neighbor_query_discovers_a_third_node() {
     a.request_manifest(b_peer).await.unwrap();
 
     let records = a
-        .neighbors(b_peer, Some("task.echo".to_owned()), 8)
+        .neighbors(b_peer, Some("tennis".to_owned()), 8)
         .await
         .unwrap();
     let c_record = records
@@ -42,11 +56,15 @@ async fn neighbor_query_discovers_a_third_node() {
     let c_manifest = a.request_manifest(c_peer).await.unwrap();
     assert_eq!(c_manifest.body.agent_id, c_identity.agent_id());
 
-    let echo = a.echo(c_peer, "hello").await.unwrap();
-    assert_eq!(echo, "hello");
+    a.send_message(c_peer, message(&a_identity, &c_identity, "hello"))
+        .await
+        .unwrap();
+    let inbox = c.inbox().list(10).unwrap();
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].from, a_identity.agent_id().to_string());
 
     let merged = a
-        .discover(&[b_peer, c_peer], Some("task.echo".to_owned()), 8, 8)
+        .discover(&[b_peer, c_peer], Some("tennis".to_owned()), 8, 8)
         .await
         .unwrap();
     assert!(merged.len() >= 2);

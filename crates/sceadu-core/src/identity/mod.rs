@@ -7,4 +7,4 @@ mod records;
 
 pub use error::Error;
 pub use keys::{AgentId, Identity, SecretSeed};
-pub use records::{Capability, ContactRecord, Manifest, ManifestBody, MANIFEST_VERSION};
+pub use records::{ContactRecord, Manifest, ManifestBody, Skill, MANIFEST_VERSION};

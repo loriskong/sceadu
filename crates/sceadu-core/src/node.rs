@@ -3,23 +3,24 @@
 //! M1c scope: one TCP + Noise connection, signed manifest exchange, and an
 //! echo RPC over a libp2p request/response stream.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddrV6;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::agent::TaskHandle;
-use crate::discovery::{capability_key, manifest_key, validate_contacts, NeighborPolicy};
+use crate::agent::{AgentMessage, FileRef, Inbox};
+use crate::discovery::{manifest_key, skill_key, validate_contacts, NeighborPolicy};
 use crate::identity::ContactRecord;
-use crate::session::{RpcRequest, RpcResponse, TaskEvent, TaskEventKind, PROTOCOL};
+use crate::session::file::{self, FileStore, FILE_PROTOCOL};
+use crate::session::{RpcRequest, RpcResponse, PROTOCOL};
 use crate::transport::tor::TorTransport;
 use crate::transport::{
     classify_multiaddr, endpoint_record, ensure_dial_allowed, ensure_ipv6_listen_addr,
     ensure_ipv6_peer_addr, ensure_operation_allowed, ensure_peer_id, is_onion, ConnectivityPolicy,
     EndpointRecord, NetworkStatus, Reachability, TransportKind, TransportStatus,
 };
-use crate::{AgentId, Capability, Error, Identity, Manifest, ManifestBody, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
+use crate::{AgentId, Error, Identity, Manifest, ManifestBody, Result, Skill};
 use futures::StreamExt;
 use libp2p::core::upgrade::Version;
 use libp2p::core::Transport;
@@ -34,16 +35,13 @@ use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviour, StreamProtocol, Swarm, SwarmEvent};
 use libp2p::SwarmBuilder;
 pub use libp2p::{Multiaddr, PeerId};
-use rand_core::{OsRng, RngCore};
-use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use libp2p_stream::Control;
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 const MANIFEST_TTL_SECONDS: u64 = 3600;
 const QUARANTINE_FAILURES: u32 = 3;
 const QUARANTINE_DURATION: Duration = Duration::from_secs(60);
-const MAX_TASK_INPUT_BYTES: usize = 64 * 1024;
-const MAX_TASK_ID_LEN: usize = 128;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -51,6 +49,7 @@ struct Behaviour {
     kad: libp2p::kad::Behaviour<MemoryStore>,
     relay_client: libp2p::relay::client::Behaviour,
     relay_server: Toggle<libp2p::relay::Behaviour>,
+    file: libp2p_stream::Behaviour,
 }
 
 /// L1 transport configuration.
@@ -105,14 +104,14 @@ impl Default for SessionConfig {
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub manifest_ttl: u64,
-    pub default_capability: String,
+    pub default_skill: String,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             manifest_ttl: MANIFEST_TTL_SECONDS,
-            default_capability: "task.echo".to_owned(),
+            default_skill: "tennis".to_owned(),
         }
     }
 }
@@ -124,6 +123,14 @@ pub struct NodeConfig {
     pub discovery: DiscoveryConfig,
     pub session: SessionConfig,
     pub agent: AgentConfig,
+    /// Optional SQLite inbox path. None uses an in-memory inbox.
+    pub inbox_path: Option<PathBuf>,
+    /// Agents allowed to deliver messages. Empty allows any verified peer.
+    pub allowed_agents: Vec<AgentId>,
+    /// Optional content-addressed file store.
+    pub file_store_path: Option<PathBuf>,
+    /// Known peer addresses added to Kademlia and dialed at startup.
+    pub peers: Vec<Multiaddr>,
 }
 
 type PendingNeighbors = (
@@ -137,31 +144,6 @@ type PendingNeighbors = (
 struct SourceStats {
     failures: u32,
     quarantined_until: Option<Instant>,
-}
-
-struct ActiveTask {
-    events: mpsc::Sender<TaskEvent>,
-    last_sequence: u64,
-}
-
-struct PendingAsk {
-    task_id: String,
-    events: mpsc::Sender<TaskEvent>,
-    receiver: Option<mpsc::Receiver<TaskEvent>>,
-    reply: oneshot::Sender<Result<TaskHandle>>,
-}
-
-struct IncomingTask {
-    peer: PeerId,
-    capability: String,
-    input: Value,
-    deadline_at: u64,
-}
-
-struct OutgoingTask {
-    peer: PeerId,
-    events: VecDeque<(u64, TaskEventKind)>,
-    in_flight: Option<(OutboundRequestId, u64, TaskEventKind, u8)>,
 }
 
 #[derive(Default)]
@@ -181,7 +163,6 @@ impl AddressBook {
     }
 }
 
-#[derive(Default)]
 struct NodeState {
     sources: HashMap<PeerId, SourceStats>,
     address_book: AddressBook,
@@ -191,17 +172,42 @@ struct NodeState {
     relay_server: bool,
     tor_enabled: bool,
     relay_reservation: Option<PeerId>,
-    pending_asks: HashMap<OutboundRequestId, PendingAsk>,
-    active_tasks: HashMap<String, ActiveTask>,
-    incoming_tasks: HashMap<String, IncomingTask>,
-    outgoing_tasks: HashMap<String, OutgoingTask>,
-    pending_event_sends: HashMap<OutboundRequestId, String>,
     manifests: HashMap<PeerId, Manifest>,
     pending_dials: HashMap<PeerId, oneshot::Sender<Result<PeerId>>>,
     pending_manifests: HashMap<OutboundRequestId, oneshot::Sender<Result<Manifest>>>,
-    pending_echoes: HashMap<OutboundRequestId, oneshot::Sender<Result<String>>>,
     pending_neighbors: HashMap<OutboundRequestId, PendingNeighbors>,
+    pending_messages: HashMap<OutboundRequestId, oneshot::Sender<Result<()>>>,
     pending_dht: HashMap<QueryId, DhtPending>,
+    agent_id: AgentId,
+    inbox: Inbox,
+    allowed_agents: Vec<AgentId>,
+    connected_peers: HashSet<PeerId>,
+}
+
+impl Default for NodeState {
+    fn default() -> Self {
+        let identity = Identity::generate();
+        Self {
+            sources: HashMap::new(),
+            address_book: AddressBook::default(),
+            pending_dial_endpoints: HashMap::new(),
+            connectivity_policy: ConnectivityPolicy::Auto,
+            relay_enabled: false,
+            relay_server: false,
+            tor_enabled: false,
+            relay_reservation: None,
+            manifests: HashMap::new(),
+            pending_dials: HashMap::new(),
+            pending_manifests: HashMap::new(),
+            pending_neighbors: HashMap::new(),
+            pending_messages: HashMap::new(),
+            pending_dht: HashMap::new(),
+            agent_id: identity.agent_id(),
+            inbox: Inbox::open(None).expect("in-memory inbox"),
+            allowed_agents: Vec::new(),
+            connected_peers: HashSet::new(),
+        }
+    }
 }
 
 enum DhtPending {
@@ -234,17 +240,17 @@ enum Command {
         peer: PeerId,
         reply: oneshot::Sender<Result<Manifest>>,
     },
-    Echo {
-        peer: PeerId,
-        message: String,
-        reply: oneshot::Sender<Result<String>>,
-    },
     Neighbors {
         peer: PeerId,
-        capability: Option<String>,
+        skill: Option<String>,
         max: u32,
         nonce: u64,
         reply: oneshot::Sender<Result<Vec<ContactRecord>>>,
+    },
+    SendMessage {
+        peer: PeerId,
+        message: Box<AgentMessage>,
+        reply: oneshot::Sender<Result<()>>,
     },
     Publish {
         reply: oneshot::Sender<Result<()>>,
@@ -262,11 +268,11 @@ enum Command {
         reply: oneshot::Sender<Result<()>>,
     },
     Provide {
-        capability: String,
+        skill: String,
         reply: oneshot::Sender<Result<()>>,
     },
     Providers {
-        capability: String,
+        skill: String,
         reply: oneshot::Sender<Result<Vec<PeerId>>>,
     },
     DialPeer {
@@ -276,12 +282,8 @@ enum Command {
     Status {
         reply: oneshot::Sender<NetworkStatus>,
     },
-    Ask {
-        peer: PeerId,
-        capability: String,
-        input: Value,
-        deadline_at: u64,
-        reply: oneshot::Sender<Result<TaskHandle>>,
+    Peers {
+        reply: oneshot::Sender<Vec<PeerId>>,
     },
     Shutdown,
 }
@@ -292,6 +294,8 @@ pub struct NodeHandle {
     peer_id: PeerId,
     listen_addr: Option<Multiaddr>,
     agent_id: AgentId,
+    inbox: Inbox,
+    file_control: Arc<Mutex<Control>>,
     commands: mpsc::Sender<Command>,
     task: JoinHandle<()>,
 }
@@ -327,12 +331,12 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
-    pub async fn echo(&self, peer: PeerId, message: impl Into<String>) -> Result<String> {
+    pub async fn send_message(&self, peer: PeerId, message: AgentMessage) -> Result<()> {
         let (reply, receiver) = oneshot::channel();
         self.commands
-            .send(Command::Echo {
+            .send(Command::SendMessage {
                 peer,
-                message: message.into(),
+                message: Box::new(message),
                 reply,
             })
             .await
@@ -343,7 +347,7 @@ impl NodeHandle {
     pub async fn neighbors(
         &self,
         peer: PeerId,
-        capability: Option<String>,
+        skill: Option<String>,
         max: u32,
     ) -> Result<Vec<ContactRecord>> {
         let nonce = now_unix();
@@ -351,7 +355,7 @@ impl NodeHandle {
         self.commands
             .send(Command::Neighbors {
                 peer,
-                capability,
+                skill,
                 max,
                 nonce,
                 reply,
@@ -368,7 +372,7 @@ impl NodeHandle {
     pub async fn discover(
         &self,
         introducers: &[PeerId],
-        capability: Option<String>,
+        skill: Option<String>,
         per_introducer: u32,
         max_total: u32,
     ) -> Result<Vec<ContactRecord>> {
@@ -381,7 +385,7 @@ impl NodeHandle {
                 break;
             }
             let Ok(batch) = self
-                .neighbors(*introducer, capability.clone(), per_introducer)
+                .neighbors(*introducer, skill.clone(), per_introducer)
                 .await
             else {
                 continue;
@@ -435,11 +439,11 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
-    pub async fn provide(&self, capability: impl Into<String>) -> Result<()> {
+    pub async fn provide(&self, skill: impl Into<String>) -> Result<()> {
         let (reply, receiver) = oneshot::channel();
         self.commands
             .send(Command::Provide {
-                capability: capability.into(),
+                skill: skill.into(),
                 reply,
             })
             .await
@@ -447,16 +451,25 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
-    pub async fn providers(&self, capability: impl Into<String>) -> Result<Vec<PeerId>> {
+    pub async fn providers(&self, skill: impl Into<String>) -> Result<Vec<PeerId>> {
         let (reply, receiver) = oneshot::channel();
         self.commands
             .send(Command::Providers {
-                capability: capability.into(),
+                skill: skill.into(),
                 reply,
             })
             .await
             .map_err(|_| Error::Closed)?;
         receiver.await.map_err(|_| Error::Closed)?
+    }
+
+    pub async fn peers(&self) -> Result<Vec<PeerId>> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::Peers { reply })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)
     }
 
     pub async fn network_status(&self) -> Result<NetworkStatus> {
@@ -477,27 +490,21 @@ impl NodeHandle {
         receiver.await.map_err(|_| Error::Closed)?
     }
 
-    /// Start a task and return a handle that yields streaming events.
-    pub async fn ask(
+    pub fn inbox(&self) -> Inbox {
+        self.inbox.clone()
+    }
+
+    pub async fn send_file(
         &self,
         peer: PeerId,
-        capability: impl Into<String>,
-        input: Value,
-        timeout: Duration,
-    ) -> Result<TaskHandle> {
-        let deadline_at = now_unix().saturating_add(timeout.as_secs().max(1));
-        let (reply, receiver) = oneshot::channel();
-        self.commands
-            .send(Command::Ask {
-                peer,
-                capability: capability.into(),
-                input,
-                deadline_at,
-                reply,
-            })
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<FileRef> {
+        let mut control = self.file_control.lock().await;
+        let stream = control
+            .open_stream(peer, StreamProtocol::new(FILE_PROTOCOL))
             .await
-            .map_err(|_| Error::Closed)?;
-        receiver.await.map_err(|_| Error::Closed)?
+            .map_err(|error| Error::Unsupported(format!("open file stream: {error}")))?;
+        file::send(stream, path.as_ref()).await
     }
 
     pub async fn shutdown(self) {
@@ -607,7 +614,7 @@ pub async fn spawn_with_config(
     };
 
     let tor_proxy = config.transport.tor_proxy;
-    let mut swarm = SwarmBuilder::with_existing_identity(keypair)
+    let swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_tcp(
             libp2p::tcp::Config::default(),
@@ -636,11 +643,50 @@ pub async fn spawn_with_config(
                 kad,
                 relay_client,
                 relay_server: Toggle::from(relay_server),
+                file: libp2p_stream::Behaviour::new(),
             }
         })
-        .map_err(|error| Error::Behaviour(error.to_string()))?
+        .map_err(|error| Error::Behaviour(error.to_string()))?;
+    let mut swarm = swarm
         .with_swarm_config(|swarm_config| swarm_config.with_idle_connection_timeout(idle_timeout))
         .build();
+    let mut file_control = swarm.behaviour_mut().file.new_control();
+    let mut incoming_files = file_control
+        .accept(StreamProtocol::new(FILE_PROTOCOL))
+        .map_err(|error| Error::Unsupported(format!("file protocol: {error}")))?;
+    let file_store_path = config
+        .file_store_path
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("sceadu-files-{}", peer_id)));
+    let file_store = FileStore::open(file_store_path)?;
+    let allowed_file_peers: HashSet<PeerId> = config
+        .allowed_agents
+        .iter()
+        .filter_map(|agent_id| peer_id_for_agent_id(agent_id).ok())
+        .collect();
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        while let Some((peer, stream)) = incoming_files.next().await {
+            if !allowed_file_peers.is_empty() && !allowed_file_peers.contains(&peer) {
+                drop(stream);
+                continue;
+            }
+            let store = file_store.clone();
+            tokio::spawn(async move {
+                let _ = file::receive(store, stream).await;
+            });
+        }
+    });
+
+    for address in &config.peers {
+        if let Some(peer) = peer_from_multiaddr(address) {
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_address(&peer, address.clone());
+        }
+        let _ = swarm.dial(address.clone());
+    }
 
     let relay_target = config.transport.relay.as_ref().map(|relay| {
         if relay
@@ -699,8 +745,8 @@ pub async fn spawn_with_config(
         swarm.add_external_address(onion.clone());
     }
 
-    let mut body = ManifestBody::new(identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
-    body.capabilities.push(Capability::new("task.echo"));
+    let mut body = ManifestBody::new(identity.agent_id(), 1, config.agent.manifest_ttl);
+    body.skills.push(Skill::new(&config.agent.default_skill));
     if config.transport.connectivity_policy == ConnectivityPolicy::Privacy {
         if let Some(onion) = &onion {
             body.endpoints.push(onion.to_string());
@@ -726,6 +772,7 @@ pub async fn spawn_with_config(
         listen_addr.clone()
     };
 
+    let inbox = Inbox::open(config.inbox_path.as_deref()).map_err(Error::Agent)?;
     let (commands, receiver) = mpsc::channel(32);
     let task = tokio::spawn(run_node(
         swarm,
@@ -733,11 +780,14 @@ pub async fn spawn_with_config(
         identity.clone(),
         receiver,
         config,
+        inbox.clone(),
     ));
     let handle = NodeHandle {
         peer_id,
         listen_addr: advertised_addr,
         agent_id: local_manifest.body.agent_id.clone(),
+        inbox,
+        file_control: Arc::new(Mutex::new(file_control)),
         commands,
         task,
     };
@@ -780,6 +830,7 @@ async fn run_node(
     identity: Identity,
     mut commands: mpsc::Receiver<Command>,
     config: NodeConfig,
+    inbox: Inbox,
 ) {
     let mut state = NodeState {
         connectivity_policy: config.transport.connectivity_policy,
@@ -791,6 +842,9 @@ async fn run_node(
             .relay
             .as_ref()
             .and_then(peer_from_multiaddr),
+        agent_id: local_manifest.body.agent_id.clone(),
+        inbox,
+        allowed_agents: config.allowed_agents.clone(),
         ..Default::default()
     };
 
@@ -830,6 +884,7 @@ fn handle_event(
 ) {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            state.connected_peers.insert(peer_id);
             if let Some(addr) = state.pending_dial_endpoints.remove(&peer_id) {
                 if let Some(mut record) = state.address_book.endpoints.get(&addr).cloned() {
                     record.verified = true;
@@ -856,6 +911,7 @@ fn handle_event(
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
+            state.connected_peers.remove(&peer_id);
             state.manifests.remove(&peer_id);
         }
         SwarmEvent::NewListenAddr { address, .. } => {
@@ -889,6 +945,7 @@ fn handle_event(
                 }
             }
             BehaviourEvent::RelayServer(_) => {}
+            BehaviourEvent::File(_) => {}
         },
         _ => {}
     }
@@ -930,7 +987,7 @@ fn handle_rpc_event(
             Message::Response {
                 request_id,
                 response,
-            } => handle_response(swarm, peer, request_id, response, state),
+            } => handle_response(peer, request_id, response, state),
         },
         request_response::Event::OutboundFailure {
             peer,
@@ -942,260 +999,46 @@ fn handle_rpc_event(
             if let Some(reply) = state.pending_manifests.remove(&request_id) {
                 let _ = reply.send(Err(Error::Request(message.clone())));
             }
-            if let Some(reply) = state.pending_echoes.remove(&request_id) {
+            if let Some(reply) = state.pending_messages.remove(&request_id) {
                 let _ = reply.send(Err(Error::Request(message.clone())));
             }
             if let Some((_, _, _, reply)) = state.pending_neighbors.remove(&request_id) {
                 record_source_failure(state, &peer);
                 let _ = reply.send(Err(Error::Request(message)));
             }
-            if let Some(task_id) = state.pending_event_sends.remove(&request_id) {
-                retry_or_advance_task_event(swarm, state, &task_id, true);
-            }
         }
         _ => {}
     }
 }
 
-fn task_error(message: impl Into<String>) -> RpcResponse {
-    RpcResponse::Error {
-        message: message.into(),
+fn handle_incoming_message(peer: PeerId, message: AgentMessage, state: &NodeState) -> RpcResponse {
+    let fail = |message: String| RpcResponse::Error { message };
+    if let Err(error) = message.validate() {
+        return fail(error.to_string());
     }
-}
-
-fn handle_task_start(
-    peer: PeerId,
-    task_id: String,
-    capability: String,
-    input: Value,
-    deadline_at: u64,
-    local_manifest: &Manifest,
-    state: &mut NodeState,
-) -> RpcResponse {
-    if let Err(error) = ensure_operation_allowed(
-        state.connectivity_policy,
-        state.relay_enabled,
-        state.relay_server,
-        state.tor_enabled,
-    ) {
-        return task_error(error.to_string());
+    if message.to != state.agent_id.to_string() {
+        return fail("message is not addressed to this agent".to_owned());
     }
-    if !state.manifests.contains_key(&peer) {
-        return task_error("manifest exchange required");
+    let Ok(from) = message.from.parse::<AgentId>() else {
+        return fail("invalid sender agent id".to_owned());
+    };
+    let Ok(expected_peer) = peer_id_for_agent_id(&from) else {
+        return fail("invalid sender agent id".to_owned());
+    };
+    if expected_peer != peer {
+        return fail("sender does not match the authenticated peer".to_owned());
     }
-    if task_id.is_empty() || task_id.len() > MAX_TASK_ID_LEN {
-        return task_error("invalid task id");
+    if !state.allowed_agents.is_empty() && !state.allowed_agents.contains(&from) {
+        return fail("sender is not in the allowlist".to_owned());
     }
-    if state.incoming_tasks.contains_key(&task_id) {
-        return task_error("task id already active");
-    }
-    if deadline_at <= now_unix() {
-        return task_error("task deadline has passed");
-    }
-    if !local_manifest
-        .body
-        .capabilities
-        .iter()
-        .any(|advertised| advertised.id == capability)
-    {
-        return task_error("capability not advertised");
-    }
-    let input_size = serde_json::to_vec(&input)
-        .map(|bytes| bytes.len())
-        .unwrap_or(usize::MAX);
-    if input_size > MAX_TASK_INPUT_BYTES {
-        return task_error("task input too large");
-    }
-
-    state.incoming_tasks.insert(
-        task_id.clone(),
-        IncomingTask {
-            peer,
-            capability,
-            input,
-            deadline_at,
+    match state.inbox.ingest(&message) {
+        Ok(_) => RpcResponse::MessageAck {
+            message_id: message.message_id,
         },
-    );
-    RpcResponse::TaskAccepted { task_id }
-}
-
-fn handle_task_ready(
-    peer: PeerId,
-    task_id: String,
-    state: &mut NodeState,
-) -> (RpcResponse, Vec<(u64, TaskEventKind)>) {
-    let Some(task) = state.incoming_tasks.remove(&task_id) else {
-        return (task_error("unknown task"), Vec::new());
-    };
-    if task.peer != peer {
-        return (task_error("task peer mismatch"), Vec::new());
-    }
-    if task.deadline_at <= now_unix() {
-        return (
-            RpcResponse::TaskReadyAck { task_id },
-            vec![
-                (
-                    1,
-                    TaskEventKind::Failed {
-                        message: "task deadline expired".to_owned(),
-                    },
-                ),
-                (2, TaskEventKind::Done),
-            ],
-        );
-    }
-
-    let events = match task.capability.as_str() {
-        "task.echo" => vec![
-            (
-                1,
-                TaskEventKind::Started {
-                    capability: task.capability.clone(),
-                },
-            ),
-            (
-                2,
-                TaskEventKind::Progress {
-                    message: "processing".to_owned(),
-                    fraction: Some(0.5),
-                },
-            ),
-            (
-                3,
-                TaskEventKind::Result {
-                    output: serde_json::json!({ "echo": task.input }),
-                },
-            ),
-            (4, TaskEventKind::Done),
-        ],
-        _ => vec![
-            (
-                1,
-                TaskEventKind::Failed {
-                    message: "no local handler for capability".to_owned(),
-                },
-            ),
-            (2, TaskEventKind::Done),
-        ],
-    };
-
-    (RpcResponse::TaskReadyAck { task_id }, events)
-}
-
-fn handle_task_event(
-    state: &mut NodeState,
-    task_id: String,
-    sequence: u64,
-    event: TaskEventKind,
-) -> RpcResponse {
-    if !state.active_tasks.contains_key(&task_id) {
-        return task_error("unknown task");
-    }
-
-    let terminal = matches!(&event, TaskEventKind::Done);
-    if let Some(active) = state.active_tasks.get_mut(&task_id) {
-        if sequence <= active.last_sequence {
-            return RpcResponse::TaskEventAck { task_id, sequence };
-        }
-        active.last_sequence = sequence;
-        let _ = active.events.try_send(TaskEvent {
-            task_id: task_id.clone(),
-            sequence,
-            event,
-        });
-    }
-    if terminal {
-        state.active_tasks.remove(&task_id);
-    }
-
-    RpcResponse::TaskEventAck { task_id, sequence }
-}
-
-fn send_next_task_event(swarm: &mut Swarm<Behaviour>, state: &mut NodeState, task_id: &str) {
-    let (peer, sequence, event) = {
-        let Some(task) = state.outgoing_tasks.get_mut(task_id) else {
-            return;
-        };
-        if task.in_flight.is_some() {
-            return;
-        }
-        let Some((sequence, event)) = task.events.pop_front() else {
-            state.outgoing_tasks.remove(task_id);
-            return;
-        };
-        (task.peer, sequence, event)
-    };
-
-    let request_id = swarm.behaviour_mut().rpc.send_request(
-        &peer,
-        RpcRequest::TaskEventPush {
-            task_id: task_id.to_owned(),
-            sequence,
-            event: event.clone(),
+        Err(error) => RpcResponse::Error {
+            message: error.to_string(),
         },
-    );
-    state
-        .pending_event_sends
-        .insert(request_id, task_id.to_owned());
-    if let Some(task) = state.outgoing_tasks.get_mut(task_id) {
-        task.in_flight = Some((request_id, sequence, event, 0));
     }
-}
-
-fn retry_or_advance_task_event(
-    swarm: &mut Swarm<Behaviour>,
-    state: &mut NodeState,
-    task_id: &str,
-    failed: bool,
-) {
-    let retry = {
-        let Some(task) = state.outgoing_tasks.get_mut(task_id) else {
-            return;
-        };
-        let Some((_, sequence, event, attempts)) = task.in_flight.take() else {
-            return;
-        };
-        if failed && attempts < 3 {
-            Some((task.peer, sequence, event, attempts + 1))
-        } else {
-            None
-        }
-    };
-
-    if let Some((peer, sequence, event, attempts)) = retry {
-        let request_id = swarm.behaviour_mut().rpc.send_request(
-            &peer,
-            RpcRequest::TaskEventPush {
-                task_id: task_id.to_owned(),
-                sequence,
-                event: event.clone(),
-            },
-        );
-        state
-            .pending_event_sends
-            .insert(request_id, task_id.to_owned());
-        if let Some(task) = state.outgoing_tasks.get_mut(task_id) {
-            task.in_flight = Some((request_id, sequence, event, attempts));
-        }
-        return;
-    }
-
-    let empty = state
-        .outgoing_tasks
-        .get(task_id)
-        .map(|task| task.events.is_empty())
-        .unwrap_or(true);
-    if empty {
-        state.outgoing_tasks.remove(task_id);
-    } else {
-        send_next_task_event(swarm, state, task_id);
-    }
-}
-
-fn new_task_id() -> String {
-    let mut bytes = [0u8; 16];
-    OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn respond_to_request(
@@ -1207,7 +1050,6 @@ fn respond_to_request(
     state: &mut NodeState,
     config: &NodeConfig,
 ) {
-    let mut followup: Vec<(PeerId, String, u64, TaskEventKind)> = Vec::new();
     let response = match request {
         RpcRequest::Manifest(manifest) => match verify_manifest_for_peer(&manifest, &peer) {
             Ok(()) => {
@@ -1218,24 +1060,11 @@ fn respond_to_request(
                 message: error.to_string(),
             },
         },
-        RpcRequest::Echo { message } => {
-            if state.manifests.contains_key(&peer) {
-                RpcResponse::Echo { message }
-            } else {
-                RpcResponse::Error {
-                    message: "manifest exchange required".to_owned(),
-                }
-            }
-        }
-        RpcRequest::Neighbors {
-            capability,
-            max,
-            nonce,
-        } => {
+        RpcRequest::Neighbors { skill, max, nonce } => {
             let records = answer_neighbors(
                 state,
                 &peer,
-                capability.as_deref(),
+                skill.as_deref(),
                 max,
                 config.discovery.neighbor_policy,
             );
@@ -1245,100 +1074,23 @@ fn respond_to_request(
                 policy: config.discovery.neighbor_policy.as_str().to_owned(),
             }
         }
-        RpcRequest::TaskStart {
-            task_id,
-            capability,
-            input,
-            deadline_at,
-        } => handle_task_start(
-            peer,
-            task_id,
-            capability,
-            input,
-            deadline_at,
-            local_manifest,
-            state,
-        ),
-        RpcRequest::TaskReady { task_id } => {
-            let events_task_id = task_id.clone();
-            let (response, events) = handle_task_ready(peer, task_id, state);
-            for (sequence, event) in events {
-                followup.push((peer, events_task_id.clone(), sequence, event));
-            }
-            response
-        }
-        RpcRequest::TaskEventPush {
-            task_id,
-            sequence,
-            event,
-        } => handle_task_event(state, task_id, sequence, event),
+        RpcRequest::Message(message) => handle_incoming_message(peer, *message, state),
     };
 
     let _ = swarm.behaviour_mut().rpc.send_response(channel, response);
-    if let Some((peer, task_id, _, _)) = followup.first() {
-        let peer = *peer;
-        let task_id = task_id.clone();
-        let events = followup
-            .into_iter()
-            .map(|(_, _, sequence, event)| (sequence, event))
-            .collect();
-        state.outgoing_tasks.insert(
-            task_id.clone(),
-            OutgoingTask {
-                peer,
-                events,
-                in_flight: None,
-            },
-        );
-        send_next_task_event(swarm, state, &task_id);
-    }
 }
 
 fn handle_response(
-    swarm: &mut Swarm<Behaviour>,
     peer: PeerId,
     request_id: OutboundRequestId,
     response: RpcResponse,
     state: &mut NodeState,
 ) {
-    if let Some(task_id) = state.pending_event_sends.remove(&request_id) {
-        retry_or_advance_task_event(swarm, state, &task_id, false);
-        return;
-    }
-
-    if let Some(pending) = state.pending_asks.remove(&request_id) {
-        let PendingAsk {
-            task_id: expected_task_id,
-            events,
-            receiver,
-            reply,
-        } = pending;
-
+    if let Some(reply) = state.pending_messages.remove(&request_id) {
         let result = match response {
-            RpcResponse::TaskAccepted { task_id } if task_id == expected_task_id => {
-                let Some(receiver) = receiver else {
-                    let _ = reply.send(Err(Error::Request(
-                        "task handle receiver already consumed".to_owned(),
-                    )));
-                    return;
-                };
-                state.active_tasks.insert(
-                    task_id.clone(),
-                    ActiveTask {
-                        events,
-                        last_sequence: 0,
-                    },
-                );
-                let _ = swarm.behaviour_mut().rpc.send_request(
-                    &peer,
-                    RpcRequest::TaskReady {
-                        task_id: task_id.clone(),
-                    },
-                );
-                Ok(TaskHandle::from_receiver(task_id, receiver))
-            }
+            RpcResponse::MessageAck { .. } => Ok(()),
             RpcResponse::Error { message } => Err(Error::Request(message)),
-            _ => Err(Error::Request("unexpected task response".to_owned())),
+            _ => Err(Error::Request("unexpected message response".to_owned())),
         };
         let _ = reply.send(result);
         return;
@@ -1357,41 +1109,17 @@ fn handle_response(
                 }
             }
             RpcResponse::Error { message } => Err(Error::Request(message)),
-            RpcResponse::Echo { .. }
-            | RpcResponse::Neighbors { .. }
-            | RpcResponse::TaskAccepted { .. }
-            | RpcResponse::TaskReadyAck { .. }
-            | RpcResponse::TaskEventAck { .. } => {
-                Err(Error::Request("unexpected manifest response".to_owned()))
-            }
+            _ => Err(Error::Request("unexpected manifest response".to_owned())),
         };
         let _ = reply.send(result);
         return;
     }
 
-    if let Some(reply) = state.pending_echoes.remove(&request_id) {
-        let result = match response {
-            RpcResponse::Echo { message } => Ok(message),
-            RpcResponse::Error { message } => Err(Error::Request(message)),
-            RpcResponse::Manifest(_)
-            | RpcResponse::Neighbors { .. }
-            | RpcResponse::TaskAccepted { .. }
-            | RpcResponse::TaskReadyAck { .. }
-            | RpcResponse::TaskEventAck { .. } => {
-                Err(Error::Request("unexpected echo response".to_owned()))
-            }
-        };
-        let _ = reply.send(result);
-        return;
-    }
-
-    if let Some((expected_nonce, max, capability, reply)) =
-        state.pending_neighbors.remove(&request_id)
-    {
+    if let Some((expected_nonce, max, skill, reply)) = state.pending_neighbors.remove(&request_id) {
         let result = match response {
             RpcResponse::Neighbors { records, nonce, .. } if nonce == expected_nonce => {
                 let total = records.len();
-                let valid = validate_contacts(records, capability.as_deref(), max);
+                let valid = validate_contacts(records, skill.as_deref(), max);
                 if valid.len() == total {
                     record_source_success(state, &peer);
                 } else {
@@ -1549,7 +1277,7 @@ fn handle_command(
             state.pending_manifests.insert(request_id, reply);
             true
         }
-        Command::Echo {
+        Command::SendMessage {
             peer,
             message,
             reply,
@@ -1563,16 +1291,20 @@ fn handle_command(
                 let _ = reply.send(Err(Error::from(error)));
                 return true;
             }
+            if let Err(error) = message.validate() {
+                let _ = reply.send(Err(Error::Agent(error)));
+                return true;
+            }
             let request_id = swarm
                 .behaviour_mut()
                 .rpc
-                .send_request(&peer, RpcRequest::Echo { message });
-            state.pending_echoes.insert(request_id, reply);
+                .send_request(&peer, RpcRequest::Message(message));
+            state.pending_messages.insert(request_id, reply);
             true
         }
         Command::Neighbors {
             peer,
-            capability,
+            skill,
             max,
             nonce,
             reply,
@@ -1593,14 +1325,14 @@ fn handle_command(
             let request_id = swarm.behaviour_mut().rpc.send_request(
                 &peer,
                 RpcRequest::Neighbors {
-                    capability: capability.clone(),
+                    skill: skill.clone(),
                     max,
                     nonce,
                 },
             );
             state
                 .pending_neighbors
-                .insert(request_id, (nonce, max, capability, reply));
+                .insert(request_id, (nonce, max, skill, reply));
             true
         }
         Command::Publish { reply } => {
@@ -1661,12 +1393,8 @@ fn handle_command(
                 .insert(query, DhtPending::Bootstrap { reply });
             true
         }
-        Command::Provide { capability, reply } => {
-            let query = match swarm
-                .behaviour_mut()
-                .kad
-                .start_providing(capability_key(&capability))
-            {
+        Command::Provide { skill, reply } => {
+            let query = match swarm.behaviour_mut().kad.start_providing(skill_key(&skill)) {
                 Ok(query) => query,
                 Err(error) => {
                     let _ = reply.send(Err(Error::Dht(error.to_string())));
@@ -1678,11 +1406,8 @@ fn handle_command(
                 .insert(query, DhtPending::Provide { reply });
             true
         }
-        Command::Providers { capability, reply } => {
-            let query = swarm
-                .behaviour_mut()
-                .kad
-                .get_providers(capability_key(&capability));
+        Command::Providers { skill, reply } => {
+            let query = swarm.behaviour_mut().kad.get_providers(skill_key(&skill));
             state.pending_dht.insert(
                 query,
                 DhtPending::Providers {
@@ -1716,47 +1441,15 @@ fn handle_command(
             }
             true
         }
-        Command::Ask {
-            peer,
-            capability,
-            input,
-            deadline_at,
-            reply,
-        } => {
-            if let Err(error) = ensure_operation_allowed(
-                state.connectivity_policy,
-                state.relay_enabled,
-                state.relay_server,
-                state.tor_enabled,
-            ) {
-                let _ = reply.send(Err(Error::from(error)));
-                return true;
-            }
-            let (events, receiver) = mpsc::channel(32);
-            let task_id = new_task_id();
-            let request_id = swarm.behaviour_mut().rpc.send_request(
-                &peer,
-                RpcRequest::TaskStart {
-                    task_id: task_id.clone(),
-                    capability,
-                    input,
-                    deadline_at,
-                },
-            );
-            state.pending_asks.insert(
-                request_id,
-                PendingAsk {
-                    task_id,
-                    events,
-                    receiver: Some(receiver),
-                    reply,
-                },
-            );
-            true
-        }
         Command::Status { reply } => {
             let status = build_network_status(swarm.local_peer_id(), local_manifest, state);
             let _ = reply.send(status);
+            true
+        }
+        Command::Peers { reply } => {
+            let mut peers: Vec<PeerId> = state.connected_peers.iter().copied().collect();
+            peers.sort_by_key(|peer| peer.to_string());
+            let _ = reply.send(peers);
             true
         }
         Command::Shutdown => false,
@@ -1874,7 +1567,7 @@ fn source_is_quarantined(state: &NodeState, peer: &PeerId) -> bool {
 fn answer_neighbors(
     state: &NodeState,
     requester: &PeerId,
-    capability: Option<&str>,
+    skill: Option<&str>,
     max: u32,
     policy: NeighborPolicy,
 ) -> Vec<ContactRecord> {
@@ -1889,13 +1582,7 @@ fn answer_neighbors(
         .iter()
         .filter(|(peer, _)| *peer != requester)
         .filter(|(_, manifest)| {
-            capability.is_none_or(|cap| {
-                manifest
-                    .body
-                    .capabilities
-                    .iter()
-                    .any(|capability| capability.id == cap)
-            })
+            skill.is_none_or(|id| manifest.body.skills.iter().any(|skill| skill.id == id))
         })
         .take(limit)
         .map(|(_, manifest)| ContactRecord {
@@ -1968,7 +1655,7 @@ mod tests {
         let signer = Identity::generate();
         let other = Identity::generate();
         let mut body = ManifestBody::new(signer.agent_id(), 1, MANIFEST_TTL_SECONDS);
-        body.capabilities.push(Capability::new("task.echo"));
+        body.skills.push(Skill::new("tennis"));
         let manifest = Manifest::sign(body, &signer).unwrap();
         let peer = peer_id_for_agent_id(&other.agent_id()).unwrap();
 
@@ -1978,9 +1665,9 @@ mod tests {
         ));
     }
 
-    fn signed_manifest(identity: &Identity, capability: &str) -> Manifest {
+    fn signed_manifest(identity: &Identity, skill: &str) -> Manifest {
         let mut body = ManifestBody::new(identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
-        body.capabilities.push(Capability::new(capability));
+        body.skills.push(Skill::new(skill));
         Manifest::sign(body, identity).unwrap()
     }
 
@@ -1992,12 +1679,12 @@ mod tests {
     }
 
     #[test]
-    fn filters_forged_expired_and_wrong_capability() {
+    fn filters_forged_expired_and_wrong_skill() {
         let identity = Identity::generate();
-        let valid = contact(signed_manifest(&identity, "task.echo"));
+        let valid = contact(signed_manifest(&identity, "tennis"));
 
-        let mut forged_manifest = signed_manifest(&identity, "task.echo");
-        forged_manifest.body.capabilities[0].id = "task.other".to_owned();
+        let mut forged_manifest = signed_manifest(&identity, "tennis");
+        forged_manifest.body.skills[0].id = "other".to_owned();
         let forged = contact(forged_manifest);
 
         let expired_identity = Identity::generate();
@@ -2005,17 +1692,14 @@ mod tests {
             ManifestBody::new(expired_identity.agent_id(), 1, MANIFEST_TTL_SECONDS);
         expired_body.issued_at = 1;
         expired_body.expires_at = 2;
-        expired_body.capabilities.push(Capability::new("task.echo"));
+        expired_body.skills.push(Skill::new("tennis"));
         let expired = contact(Manifest::sign(expired_body, &expired_identity).unwrap());
 
         let wrong_identity = Identity::generate();
-        let wrong_capability = contact(signed_manifest(&wrong_identity, "task.other"));
+        let wrong_skill = contact(signed_manifest(&wrong_identity, "other"));
 
-        let filtered = validate_contacts(
-            vec![valid, forged, expired, wrong_capability],
-            Some("task.echo"),
-            8,
-        );
+        let filtered =
+            validate_contacts(vec![valid, forged, expired, wrong_skill], Some("tennis"), 8);
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].manifest.body.agent_id, identity.agent_id());
@@ -2024,9 +1708,9 @@ mod tests {
     #[test]
     fn deduplicates_contacts() {
         let identity = Identity::generate();
-        let duplicate = contact(signed_manifest(&identity, "task.echo"));
+        let duplicate = contact(signed_manifest(&identity, "tennis"));
 
-        let filtered = validate_contacts(vec![duplicate.clone(), duplicate], Some("task.echo"), 8);
+        let filtered = validate_contacts(vec![duplicate.clone(), duplicate], Some("tennis"), 8);
 
         assert_eq!(filtered.len(), 1);
     }
@@ -2093,9 +1777,9 @@ mod tests {
     fn respects_the_requested_record_limit() {
         let mut records = Vec::new();
         for _ in 0..3 {
-            records.push(contact(signed_manifest(&Identity::generate(), "task.echo")));
+            records.push(contact(signed_manifest(&Identity::generate(), "tennis")));
         }
 
-        assert_eq!(validate_contacts(records, Some("task.echo"), 2).len(), 2);
+        assert_eq!(validate_contacts(records, Some("tennis"), 2).len(), 2);
     }
 }

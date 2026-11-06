@@ -43,15 +43,15 @@ pub(crate) fn manifest_key(agent_id: &AgentId) -> RecordKey {
     RecordKey::new(&digest)
 }
 
-pub(crate) fn capability_key(capability: &str) -> RecordKey {
-    let normalized = capability.trim().to_ascii_lowercase();
-    let digest = Sha256::digest(format!("aan/cap/{normalized}").as_bytes());
+pub(crate) fn skill_key(skill: &str) -> RecordKey {
+    let normalized = skill.trim().to_ascii_lowercase();
+    let digest = Sha256::digest(format!("aan/skill/{normalized}").as_bytes());
     RecordKey::new(&digest)
 }
 
 pub(crate) fn validate_contacts(
     records: Vec<ContactRecord>,
-    capability: Option<&str>,
+    skill: Option<&str>,
     max: u32,
 ) -> Vec<ContactRecord> {
     let limit = max.clamp(1, 32) as usize;
@@ -65,13 +65,13 @@ pub(crate) fn validate_contacts(
         if record.manifest.verify().is_err() {
             continue;
         }
-        if let Some(cap) = capability {
+        if let Some(id) = skill {
             if !record
                 .manifest
                 .body
-                .capabilities
+                .skills
                 .iter()
-                .any(|capability| capability.id == cap)
+                .any(|candidate| candidate.id == id)
             {
                 continue;
             }

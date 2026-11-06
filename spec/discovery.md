@@ -9,43 +9,44 @@ Keys are raw 32-byte SHA-256 digests:
 
 ```text
 manifest key   = SHA-256("aan/id/" + agent_id)
-capability key = SHA-256("aan/cap/" + lowercase(trim(capability)))
+skill key      = SHA-256("aan/skill/" + lowercase(trim(skill)))
 ```
 
 The manifest value is the UTF-8 JSON encoding of the signed `Manifest`.
-Capability keys use libp2p Kademlia provider records; the record payload is the
+Skill keys use libp2p Kademlia provider records; the record payload is the
 provider's PeerID and is not a custom signed object. Callers must fetch the
 provider's manifest and verify it before use.
 
 ## RPC protocol
 
-Protocol ID: `/sceadu/rpc/1.0.0`. Frames are JSON-encoded request/response enum
-values over a libp2p request-response stream.
+Protocol ID: `/sceadu/message/1.0.0`. Frames are JSON-encoded request/response
+enum values over a libp2p request-response stream.
 
 Requests:
 
 ```json
 {"Manifest": {"body": {}, "signature": "..."}}
-{"Echo": {"message": "hello"}}
-{"Neighbors": {"capability": "task.echo", "max": 8, "nonce": 123}}
+{"Message": {"protocol": "sceadu.agent-message/0.1", "message_id": "...", "context_id": "...", "from": "...", "to": "...", "role": "user", "parts": [{"text": "hello"}], "created_at": 0}}
+{"Neighbors": {"skill": "tennis", "max": 8, "nonce": 123}}
 ```
 
 Responses:
 
 ```json
 {"Manifest": {"body": {}, "signature": "..."}}
-{"Echo": {"message": "hello"}}
+{"MessageAck": {"message_id": "..."}}
 {"Neighbors": {"records": [], "nonce": 123, "policy": "open"}}
 {"Error": {"message": "..."}}
 ```
 
-`Echo` requires a previously verified manifest exchange. `Neighbors` records are
+`Message` is accepted only from an allowlisted AgentID whose identity matches the
+authenticated PeerID. `Neighbors` records are
 full signed manifests; `observed_at` is an advisory Unix timestamp, not a trust
 signal. Responders clamp `max` to 1..=32 and exclude the requester from the
 result. `open` returns the local verified peer cache; `stealth` returns none.
 
 The client verifies every returned manifest, rejects expired or invalid
-signatures, filters by requested capability, de-duplicates by AgentID, and caps
+signatures, filters by requested skill, de-duplicates by AgentID, and caps
 the result. Local source quarantine is not part of the wire format.
 
 ## Invite tickets

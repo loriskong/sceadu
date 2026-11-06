@@ -7,9 +7,11 @@ description = "Core identity and manifest types for Sceadu"
 
 [dependencies]
 libp2p.workspace = true
+libp2p-stream.workspace = true
 futures.workspace = true
 data-encoding.workspace = true
 sha2.workspace = true
+rusqlite.workspace = true
 tokio.workspace = true
 tokio-socks.workspace = true
 tokio-util.workspace = true

@@ -11,23 +11,28 @@ use crate::identity::{AgentId, Identity};
 /// Current manifest wire version.
 pub const MANIFEST_VERSION: u32 = 1;
 
-/// A capability advertised by an agent.
+/// A descriptive skill advertised by an agent.
+///
+/// Skills are discovery/display metadata, not an invocation contract.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Capability {
+pub struct Skill {
     pub id: String,
-    pub version: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
-    pub streaming: bool,
+    pub tags: Vec<String>,
 }
 
-impl Capability {
+impl Skill {
     pub fn new(id: impl Into<String>) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
-            version: "1.0.0".to_owned(),
+            name: id.clone(),
+            id,
             description: String::new(),
-            streaming: false,
+            tags: Vec::new(),
         }
     }
 
@@ -36,8 +41,8 @@ impl Capability {
         self
     }
 
-    pub fn streaming(mut self) -> Self {
-        self.streaming = true;
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = tags.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -50,7 +55,7 @@ pub struct ManifestBody {
     pub seq: u64,
     pub issued_at: u64,
     pub expires_at: u64,
-    pub capabilities: Vec<Capability>,
+    pub skills: Vec<Skill>,
     pub endpoints: Vec<String>,
     pub protocols: Vec<String>,
     pub discoverable: bool,
@@ -65,7 +70,7 @@ impl ManifestBody {
             seq,
             issued_at,
             expires_at: issued_at.saturating_add(ttl_seconds),
-            capabilities: Vec::new(),
+            skills: Vec::new(),
             endpoints: Vec::new(),
             protocols: Vec::new(),
             discoverable: true,
@@ -149,7 +154,7 @@ mod tests {
 
     fn body(identity: &Identity) -> ManifestBody {
         let mut body = ManifestBody::new(identity.agent_id(), 1, 3600);
-        body.capabilities.push(Capability::new("task.echo"));
+        body.skills.push(Skill::new("tennis"));
         body.endpoints.push("/ip6/::1/tcp/4001".to_owned());
         body.protocols.push("/sceadu/echo/1.0.0".to_owned());
         body
@@ -167,7 +172,7 @@ mod tests {
     fn rejects_tampering() {
         let identity = Identity::from_seed([2u8; 32]);
         let mut manifest = Manifest::sign(body(&identity), &identity).unwrap();
-        manifest.body.capabilities[0].id = "task.other".to_owned();
+        manifest.body.skills[0].id = "other".to_owned();
 
         assert!(matches!(
             manifest.verify_at(now_unix()),

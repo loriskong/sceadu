@@ -6,7 +6,7 @@ This file is loaded by DSH-compatible agents as project context. Keep it accurat
 
 Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, discover each other through a structured DHT plus agent-mediated neighbor discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
 
-Current stage: pre-alpha (IPv6-only). M3 is complete and the MCP bridge is deferred. The MVP is defined in section 4.3 of the design document.
+Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protocol is removed. A local MCP stdio adapter and a persistent daemon inbox exist. The MVP is defined in section 4.3 of the design document.
 
 ## Sources of truth
 
@@ -29,6 +29,10 @@ Current stage: pre-alpha (IPv6-only). M3 is complete and the MCP bridge is defer
 - Anonymity scope: content confidentiality and pseudonymity by default. Tor is an optional transport that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.
 - Sceadu peer transport is IPv6-only. IPv4 is rejected in listen, dial, relay, manifest endpoint, invite seed, and Tor SOCKS proxy addresses. A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped addresses are rejected. There is no external-address parameter; the bound IPv6 address is advertised.
 - Connectivity policies: `auto`, `direct`, `relay`, `privacy`. `privacy` never silently falls back to clearnet. `relay` requires `--relay` or `--relay-server`; `direct` rejects `/p2p-circuit` and `/onion3` addresses. Tor is an optional IPv6 SOCKS5 plugin and requires an externally configured service.
+- The transport carries A2A-inspired `AgentMessage` envelopes. Sceadu does not define tasks, capabilities, acceptance criteria, or completion. Agents decide when a conversation is done.
+- The daemon is foreground and owns the node and SQLite inbox. CLI/MCP clients use a Unix socket. There is no sender outbox; a send to an offline peer fails.
+- Demo admission is closed: `--allow-agent` is required. A future opt-in stranger mode will add discovery-driven contact, consent, rate limiting, reputation, and blocklists; do not implement it silently.
+- File transfer is a separate chunked, SHA-256-verified, resumable stream with a 50 MiB limit. Files are not base64-encoded into messages.
 - UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 is retained for firewall-restricted or non-inbound peers.
 - Out of MVP: mobile apps, mixnet, offline messaging, groups, payments, GUI, key recovery.
 
@@ -75,7 +79,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 - No custom cryptography. Use audited crates.
 - No plaintext fallback. Fail closed on signature, version, or crypto errors.
 - L0 identity/records must stay independent of libp2p. libp2p is allowed only in L1 transport and above, inside `sceadu-core`.
-- Wire-format changes require a spec update and test vectors under `spec/`.
+- Wire-format changes require a spec update and test vectors under `spec/`; message and file formats are in `spec/message.md`.
 - Never commit secrets, private keys, tokens, or `.design/` content.
 - Prefer small modules with explicit interfaces.
 
@@ -87,7 +91,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Repository layout
 
-- `crates/` - Rust workspace (`sceadu-core`, `sceadu-cli`); `sceadu-core/src` contains `identity`, `transport`, `discovery`, `session`, `agent`, and the `node.rs` composition root
+- `crates/` - Rust workspace (`sceadu-core`, `sceadu-cli`); `sceadu-core/src` contains `identity`, `transport`, `discovery`, `session`, `agent`, `node.rs` composition root, and `daemon.rs` IPC server
 - `spec/` - wire format and test vectors
 - `skills/sceadu/` - agent skill files
 - `scripts/` - maintenance and CI scripts
@@ -96,4 +100,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1, M2, and M3 are complete. M4a/M4b connectivity is now IPv6-only; port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 and the optional Tor plugin remain. Public bootstrap/relay infrastructure and QUIC remain. The MCP bridge remains deferred by explicit user decision; do not add it without a new decision. Remaining hardening: single-use invites, persistent reputation, and larger eclipse simulations.
+M1 and M2 are complete; M3 was replaced by the Agent message network. M4a/M4b connectivity is IPv6-only; port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 and the optional Tor plugin remain. The foreground daemon, SQLite inbox, allowlist admission, A2A-inspired messages, 50 MiB file stream, and local MCP stdio adapter are implemented. Public bootstrap/relay infrastructure and QUIC remain. Remaining hardening: single-use invites, persistent reputation, stranger-mode consent/rate limits, and larger eclipse simulations.

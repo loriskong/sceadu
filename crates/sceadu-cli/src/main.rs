@@ -1,6 +1,7 @@
 use std::fs;
 use std::net::SocketAddrV6;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -10,8 +11,8 @@ use sceadu_core::daemon::{self, IpcRequest, IpcResponse};
 use sceadu_core::keystore;
 use sceadu_core::{
     ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, AgentId, ConnectivityPolicy, DiscoveryConfig,
-    Identity, InviteTicket, Manifest, ManifestBody, Multiaddr, NeighborPolicy, NodeConfig, Skill,
-    TransportConfig,
+    Identity, InviteTicket, Manifest, ManifestBody, Multiaddr, NeighborPolicy, NodeConfig,
+    SessionConfig, Skill, TransportConfig,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -88,6 +89,9 @@ enum Command {
         /// Known peer address to add and dial at startup. Repeat.
         #[arg(long = "peer")]
         peers: Vec<Multiaddr>,
+        /// Idle connection timeout in seconds (default 3600).
+        #[arg(long, default_value_t = 3600)]
+        idle_timeout: u64,
     },
     /// Send one AgentMessage JSON file to a peer address.
     Send {
@@ -225,6 +229,7 @@ async fn main() -> Result<()> {
             neighbor_policy,
             inbox,
             peers,
+            idle_timeout,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             ensure_ipv6_listen_addr(&listen)?;
@@ -247,12 +252,15 @@ async fn main() -> Result<()> {
                 discovery: DiscoveryConfig {
                     neighbor_policy: parse_neighbor_policy(&neighbor_policy)?,
                 },
+                session: SessionConfig {
+                    idle_connection_timeout: Duration::from_secs(idle_timeout.max(1)),
+                    dial_timeout: Duration::from_secs(5),
+                },
                 agent: sceadu_core::AgentConfig::default(),
                 allowed_agents: allow_agents,
                 inbox_path: Some(inbox_path),
                 file_store_path: Some(file_store_path),
                 peers,
-                ..Default::default()
             };
             daemon::run(identity, Some(listen), config, socket_path(&cli.socket)?).await?;
         }

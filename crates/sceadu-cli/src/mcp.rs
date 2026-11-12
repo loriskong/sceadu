@@ -88,6 +88,15 @@ async fn call_tool(socket: &Path, params: &Value) -> Result<Value> {
                     .ok_or_else(|| anyhow!("message is required"))?,
             )?,
         },
+        "sceadu_send_text" => IpcRequest::SendText {
+            to: required_str(&args, "to")?,
+            peer_agent_id: required_str(&args, "peer_agent_id")?.parse()?,
+            text: required_str(&args, "text")?,
+            context_id: args
+                .get("context_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        },
         "sceadu_inbox" => IpcRequest::Inbox {
             limit: args.get("limit").and_then(Value::as_u64).unwrap_or(20) as u32,
         },
@@ -157,6 +166,20 @@ fn tool_defs() -> Value {
                     "message": {"type": "object", "description": "AgentMessage envelope"}
                 },
                 "required": ["to", "message"]
+            }
+        },
+        {
+            "name": "sceadu_send_text",
+            "description": "Send a text AgentMessage to a Sceadu peer without constructing the full JSON envelope. Provide the peer multiaddr, the peer AgentID, and the text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Peer multiaddr including /p2p/<peer-id>"},
+                    "peer_agent_id": {"type": "string", "description": "Target aan: AgentID"},
+                    "text": {"type": "string"},
+                    "context_id": {"type": "string"}
+                },
+                "required": ["to", "peer_agent_id", "text"]
             }
         },
         {

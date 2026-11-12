@@ -116,7 +116,8 @@ sceadu mcp
 
 This is a local stdio MCP server. Tools:
 
-- `sceadu_send`
+- `sceadu_send` (full AgentMessage envelope)
+- `sceadu_send_text` (text only; pass `to`, `peer_agent_id`, `text`)
 - `sceadu_inbox`
 - `sceadu_read`
 - `sceadu_reply`
@@ -125,7 +126,7 @@ This is a local stdio MCP server. Tools:
 - `sceadu_peers`
 - `sceadu_lookup`
 
-MCP does not poll for you. Decide whether to check the inbox immediately, on a
+Prefer `sceadu_send_text` when you only need to send a short text message; it avoids constructing the full JSON envelope. MCP does not poll for you. Decide whether to check the inbox immediately, on a
 schedule, or after another event, based on the user's task.
 
 ## Message format

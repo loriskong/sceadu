@@ -330,6 +330,7 @@ fn mcp_initializes_and_lists_tools() {
         .filter_map(|tool| tool["name"].as_str())
         .collect();
     assert!(names.contains(&"sceadu_send"));
+    assert!(names.contains(&"sceadu_send_text"));
     assert!(names.contains(&"sceadu_inbox"));
     let _ = child.kill();
     let _ = child.wait();

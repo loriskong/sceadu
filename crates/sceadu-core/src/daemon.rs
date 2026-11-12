@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::agent::{new_message_id, AgentMessage, Part, Role};
+use crate::agent::{new_context_id, new_message_id, AgentMessage, Part, Role, TextPart};
 use crate::node::{spawn_with_config, Multiaddr, NodeConfig, NodeHandle, PeerId};
 use crate::{AgentId, Error, Identity, Result};
 
@@ -20,6 +20,13 @@ pub enum IpcRequest {
     Send {
         to: String,
         message: AgentMessage,
+    },
+    SendText {
+        to: String,
+        peer_agent_id: AgentId,
+        text: String,
+        #[serde(default)]
+        context_id: Option<String>,
     },
     Inbox {
         #[serde(default = "default_limit")]
@@ -160,6 +167,30 @@ async fn dispatch(request: IpcRequest, node: Arc<NodeHandle>) -> IpcResponse {
     let result = match request {
         IpcRequest::Send { to, mut message } => {
             message.from = node.agent_id().to_string();
+            if let Err(error) = message.validate() {
+                return IpcResponse::error(error.to_string());
+            }
+            send_to(&node, &to, message)
+                .await
+                .map(|_| json!({"status": "delivered"}))
+        }
+        IpcRequest::SendText {
+            to,
+            peer_agent_id,
+            text,
+            context_id,
+        } => {
+            let message = AgentMessage {
+                protocol: crate::agent::MESSAGE_PROTOCOL.to_owned(),
+                message_id: new_message_id(),
+                context_id: context_id.unwrap_or_else(new_context_id),
+                in_reply_to: None,
+                from: node.agent_id().to_string(),
+                to: peer_agent_id.to_string(),
+                role: Role::User,
+                parts: vec![Part::Text(TextPart { text })],
+                created_at: now_unix(),
+            };
             if let Err(error) = message.validate() {
                 return IpcResponse::error(error.to_string());
             }

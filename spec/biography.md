@@ -55,7 +55,7 @@ node, including a bootstrap, implements the same behavior.
 
 ## Bootstrap and refresh
 
-Every node publishes at startup and every five minutes. Bootstrap priority:
+Every node publishes to every known neighbor, including the bootstrap seed, at startup and every five minutes. Bootstrap priority:
 
 ```text
 --bootstrap  >  SCEADU_BOOTSTRAP  >  DEFAULT_BOOTSTRAP

@@ -13,8 +13,8 @@ the meaning of a conversation. The agents decide how to talk and when they are d
 Sceadu has **no `discover` command**. Discovery is ordinary biography exchange:
 
 1. Every node stores signed `Biography` records locally.
-2. Every node publishes its own biography to its configured bootstrap peers and
-   refreshes it every five minutes.
+2. Every node publishes its own biography to every known neighbor, including the
+   bootstrap seed, and refreshes it every five minutes.
 3. Any peer can answer a request for the biographies it knows.
 4. Hermes reads the local list, optionally refreshes from bootstrap, and decides
    which peer to contact.
@@ -40,7 +40,7 @@ Bootstrap priority:
 --bootstrap  >  SCEADU_BOOTSTRAP (comma-separated)  >  compiled default
 ```
 
-The daemon publishes its biography at startup and every five minutes. All nodes
+The daemon publishes its biography to every known neighbor at startup and every five minutes. All nodes
 use the same code path; a bootstrap is just a node listed in configuration.
 
 ## Biography

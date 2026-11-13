@@ -25,7 +25,7 @@ Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protoco
 
 - Rust core and desktop CLI first (Linux, macOS, Windows); mobile companion apps come after MVP.
 - Discovery is signed Biography exchange. Every node stores verified Biographies,
-  publishes its own to configured bootstrap peers, and serves biography queries.
+  publishes its own to every known neighbor, including bootstrap, and serves biography queries.
   There is no DHT, no `discover` command, and no special bootstrap protocol role.
 - No Sybil protection in alpha: invite-only / small networks. Do not add tokens, staking, or PoW silently.
 - Anonymity scope: content confidentiality and pseudonymity by default. Tor is an optional transport that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.

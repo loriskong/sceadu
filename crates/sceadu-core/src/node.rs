@@ -38,7 +38,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 /// Default bootstrap multiaddr. Empty means none configured.
-pub const DEFAULT_BOOTSTRAP: &str = "";
+pub const DEFAULT_BOOTSTRAP: &str = "/ip6/2402:4e00:c011:4300:3056:455a:18e2:0/tcp/29788/p2p/12D3KooWKfNgZEDi7nhJXtBEXAEnT5zuPaNjgothqKDoFJBmRVuv";
 const BIOGRAPHY_REFRESH_SECONDS: u64 = 300;
 const BIOGRAPHY_QUERY_LIMIT: u32 = 1000;
 

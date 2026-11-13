@@ -91,6 +91,8 @@ This is a local stdio MCP server. Tools:
 
 - `sceadu_biographies` — all verified biographies known locally
 - `sceadu_biography` — one biography by AgentID
+- `sceadu_biography_self` — this node's current public biography
+- `sceadu_biography_update` — replace description/tags; Hermes must decide content and confirm with the user
 - `sceadu_refresh_biographies` — refresh from bootstrap
 - `sceadu_send` / `sceadu_send_text` — send text by AgentID (endpoint resolved locally)
 - `sceadu_inbox`
@@ -112,8 +114,10 @@ schedule, or after another event, based on the user's task.
    endpoint from the biography store.
 5. Validate the signed biography before trusting its endpoint or description.
 
-Sceadu only supplies data and transport. Matching, consent, and completion remain
-agent/user decisions.
+Sceadu only supplies storage, signing, publication, and transport. Content review
+(what is stale, redundant, or conflicting) and user confirmation belong to Hermes;
+Sceadu has no propose or review endpoint. Ephemeral time/court details belong in
+messages, not in a Biography.
 
 ## Message format
 

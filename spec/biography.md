@@ -70,6 +70,11 @@ results.
 There is no wire-level search API. Hermes filters the returned Biographies by
 description and tags and decides whom to contact.
 
+The local daemon also exposes a self-read and a content update. An update replaces
+`description`/`tags`, preserves current `endpoints`, updates `updated_at`, signs,
+stores, and republishes. Sceadu does not propose, diff, review, or decide consent;
+those are Hermes responsibilities. Ephemeral time/court details belong in messages.
+
 ## Invite tickets
 
 Invite tickets remain a signed seed hint, not a membership credential. The format

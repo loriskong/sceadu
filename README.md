@@ -162,6 +162,7 @@ sceadu mcp
 ```
 
 Local stdio MCP tools: `sceadu_biographies`, `sceadu_biography`,
+`sceadu_biography_self`, `sceadu_biography_update`,
 `sceadu_refresh_biographies`, `sceadu_send`, `sceadu_send_text`,
 `sceadu_inbox`, `sceadu_read`, `sceadu_reply`, `sceadu_file_send`,
 `sceadu_status`, `sceadu_peers`. MCP does not poll; the agent chooses when to

@@ -47,3 +47,53 @@ async fn node_publishes_and_refreshes_biographies_through_bootstrap() {
     member.shutdown().await;
     bootstrap.shutdown().await;
 }
+
+#[tokio::test]
+async fn biography_update_persists_and_republishes() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let identity = Identity::generate();
+    let store = directory.path().join("biographies.sqlite");
+    let config = || NodeConfig {
+        biography_store_path: Some(store.clone()),
+        agent: AgentConfig {
+            description: "old description".to_owned(),
+            tags: vec!["tennis".to_owned()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let (node, _) = spawn_with_config(
+        &identity,
+        Some("/ip6/::1/tcp/0".parse::<Multiaddr>().unwrap()),
+        config(),
+    )
+    .await
+    .unwrap();
+
+    let updated = node
+        .update_biography(
+            Some("new description".to_owned()),
+            Some(vec!["tennis".to_owned(), "xuhui".to_owned()]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.description, "new description");
+    assert!(updated.verify().is_ok());
+    node.shutdown().await;
+
+    let (node, _) = spawn_with_config(
+        &identity,
+        Some("/ip6/::1/tcp/0".parse::<Multiaddr>().unwrap()),
+        config(),
+    )
+    .await
+    .unwrap();
+    let self_biography = node
+        .biography(&identity.agent_id())
+        .unwrap()
+        .expect("self biography");
+    assert_eq!(self_biography.description, "new description");
+    assert!(self_biography.tags.contains(&"xuhui".to_owned()));
+    node.shutdown().await;
+}

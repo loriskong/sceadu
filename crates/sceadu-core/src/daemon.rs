@@ -47,6 +47,13 @@ pub enum IpcRequest {
     Biography {
         agent_id: String,
     },
+    BiographySelf,
+    BiographyUpdate {
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+    },
     RefreshBiographies,
     Peers,
     FileSend {
@@ -235,6 +242,14 @@ async fn dispatch(request: IpcRequest, node: Arc<NodeHandle>) -> IpcResponse {
             };
             node.biography(&agent_id).map(|biography| json!(biography))
         }
+        IpcRequest::BiographySelf => {
+            let agent_id = node.agent_id().clone();
+            node.biography(&agent_id).map(|biography| json!(biography))
+        }
+        IpcRequest::BiographyUpdate { description, tags } => node
+            .update_biography(description, tags)
+            .await
+            .map(|biography| json!(biography)),
         IpcRequest::RefreshBiographies => node
             .refresh_biographies()
             .await

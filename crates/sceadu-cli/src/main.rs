@@ -133,6 +133,15 @@ enum Command {
     Peers,
     /// Print daemon network status.
     Status,
+    /// Print this daemon's current signed biography.
+    BiographySelf,
+    /// Replace the public description/tags, preserving endpoints.
+    BiographyUpdate {
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+    },
     /// List verified biographies known by the local daemon.
     Biographies,
     /// Print one biography from the local daemon.
@@ -325,6 +334,21 @@ async fn main() -> Result<()> {
         }
         Command::Status => {
             let response = call(&cli.socket, IpcRequest::Status).await?;
+            print_response(response)?;
+        }
+        Command::BiographySelf => {
+            let response = call(&cli.socket, IpcRequest::BiographySelf).await?;
+            print_response(response)?;
+        }
+        Command::BiographyUpdate { description, tags } => {
+            let response = call(
+                &cli.socket,
+                IpcRequest::BiographyUpdate {
+                    description,
+                    tags: if tags.is_empty() { None } else { Some(tags) },
+                },
+            )
+            .await?;
             print_response(response)?;
         }
         Command::Biographies => {

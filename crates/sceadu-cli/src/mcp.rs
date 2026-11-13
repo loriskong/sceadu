@@ -143,6 +143,17 @@ async fn call_tool(socket: &Path, params: &Value) -> Result<Value> {
         "sceadu_biography" => IpcRequest::Biography {
             agent_id: required_str(&args, "agent_id")?,
         },
+        "sceadu_biography_self" => IpcRequest::BiographySelf,
+        "sceadu_biography_update" => IpcRequest::BiographyUpdate {
+            description: args
+                .get("description")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            tags: args
+                .get("tags")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok()),
+        },
         "sceadu_refresh_biographies" => IpcRequest::RefreshBiographies,
         _ => return Err(anyhow!("unknown tool: {name}")),
     };
@@ -262,6 +273,22 @@ fn tool_defs() -> Value {
                 "type": "object",
                 "properties": {"agent_id": {"type": "string"}},
                 "required": ["agent_id"]
+            }
+        },
+        {
+            "name": "sceadu_biography_self",
+            "description": "Return this node's current signed biography. Hermes uses it to decide whether any content is stale, redundant, or conflicting.",
+            "inputSchema": {"type": "object"}
+        },
+        {
+            "name": "sceadu_biography_update",
+            "description": "Replace the public biography description and/or tags, preserving endpoints. Sceadu signs, stores, and republishes. Hermes owns the decision and user confirmation; Sceadu does not propose or review content.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}}
+                }
             }
         },
         {

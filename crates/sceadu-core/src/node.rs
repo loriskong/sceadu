@@ -198,6 +198,11 @@ enum Command {
         reply: oneshot::Sender<Result<()>>,
     },
     PublishBiography,
+    BiographyUpdate {
+        description: Option<String>,
+        tags: Option<Vec<String>>,
+        reply: oneshot::Sender<Result<Biography>>,
+    },
     RefreshBiographies {
         reply: oneshot::Sender<Result<Vec<Biography>>>,
     },
@@ -264,6 +269,23 @@ impl NodeHandle {
             .send(Command::SendMessage {
                 peer,
                 message: Box::new(message),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::Closed)?;
+        receiver.await.map_err(|_| Error::Closed)?
+    }
+
+    pub async fn update_biography(
+        &self,
+        description: Option<String>,
+        tags: Option<Vec<String>>,
+    ) -> Result<Biography> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::BiographyUpdate {
+                description,
+                tags,
                 reply,
             })
             .await
@@ -593,18 +615,21 @@ pub async fn spawn_with_config(
             endpoints.push(address.to_string());
         }
     }
-    let local_biography = Biography::new(
-        identity,
-        endpoints,
-        &config.agent.description,
-        config.agent.tags.clone(),
-    )?;
-
     let biography_store_path = config
         .biography_store_path
         .clone()
         .unwrap_or_else(|| std::env::temp_dir().join(format!("sceadu-biographies-{}", peer_id)));
     let biographies = BiographyStore::open(Some(&biography_store_path))?;
+    let previous = biographies.get(&identity.agent_id())?;
+    let description = previous
+        .as_ref()
+        .map(|biography| biography.description.clone())
+        .unwrap_or_else(|| config.agent.description.clone());
+    let tags = previous
+        .as_ref()
+        .map(|biography| biography.tags.clone())
+        .unwrap_or_else(|| config.agent.tags.clone());
+    let local_biography = Biography::new(identity, endpoints, description, tags)?;
     biographies.upsert(&local_biography)?;
     let inbox = Inbox::open(config.inbox_path.as_deref()).map_err(Error::Agent)?;
     let (commands, receiver) = mpsc::channel(32);
@@ -663,7 +688,7 @@ async fn wait_for_connection(swarm: &mut Swarm<Behaviour>, peer: PeerId) -> Resu
 
 async fn run_node(
     mut swarm: Swarm<Behaviour>,
-    local_biography: Biography,
+    mut local_biography: Biography,
     identity: Identity,
     mut commands: mpsc::Receiver<Command>,
     config: NodeConfig,
@@ -697,7 +722,7 @@ async fn run_node(
                 handle_event(
                     &mut swarm,
                     event,
-                    &local_biography,
+                    &mut local_biography,
                     &identity,
                     &mut state,
                     &config,
@@ -706,7 +731,7 @@ async fn run_node(
             command = commands.recv() => {
                 match command {
                     Some(command) => {
-                        if !handle_command(&mut swarm, command, &local_biography, &mut state, &config) {
+                        if !handle_command(&mut swarm, command, &mut local_biography, &identity, &mut state, &config) {
                             break;
                         }
                     }
@@ -720,7 +745,7 @@ async fn run_node(
 fn handle_event(
     swarm: &mut Swarm<Behaviour>,
     event: SwarmEvent<BehaviourEvent>,
-    local_biography: &Biography,
+    local_biography: &mut Biography,
     identity: &Identity,
     state: &mut NodeState,
     config: &NodeConfig,
@@ -761,12 +786,13 @@ fn handle_event(
             state
                 .address_book
                 .upsert(endpoint_record(&address, "listen", false));
-            let _ = (local_biography, identity);
+            add_biography_endpoint(swarm, local_biography, identity, state, config, &address);
         }
         SwarmEvent::ExternalAddrConfirmed { address } => {
             state
                 .address_book
                 .upsert(endpoint_record(&address, "external", false));
+            add_biography_endpoint(swarm, local_biography, identity, state, config, &address);
         }
         SwarmEvent::Behaviour(event) => match event {
             BehaviourEvent::Rpc(event) => {
@@ -986,7 +1012,8 @@ fn publish_biography(
 fn handle_command(
     swarm: &mut Swarm<Behaviour>,
     command: Command,
-    local_biography: &Biography,
+    local_biography: &mut Biography,
+    identity: &Identity,
     state: &mut NodeState,
     config: &NodeConfig,
 ) -> bool {
@@ -1060,6 +1087,34 @@ fn handle_command(
         }
         Command::PublishBiography => {
             publish_biography(swarm, local_biography, config);
+            true
+        }
+        Command::BiographyUpdate {
+            description,
+            tags,
+            reply,
+        } => {
+            let description = description.unwrap_or_else(|| local_biography.description.clone());
+            let tags = tags.unwrap_or_else(|| local_biography.tags.clone());
+            match Biography::new(
+                identity,
+                local_biography.endpoints.clone(),
+                description,
+                tags,
+            ) {
+                Ok(next) => {
+                    if let Err(error) = state.biographies.upsert(&next) {
+                        let _ = reply.send(Err(error));
+                        return true;
+                    }
+                    *local_biography = next.clone();
+                    publish_biography(swarm, local_biography, config);
+                    let _ = reply.send(Ok(next));
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(Error::Identity(error)));
+                }
+            }
             true
         }
         Command::RequestBiography { peer, reply } => {
@@ -1139,6 +1194,37 @@ fn handle_command(
             true
         }
         Command::Shutdown => false,
+    }
+}
+
+fn add_biography_endpoint(
+    swarm: &mut Swarm<Behaviour>,
+    local_biography: &mut Biography,
+    identity: &Identity,
+    state: &mut NodeState,
+    config: &NodeConfig,
+    address: &Multiaddr,
+) {
+    let value = address.to_string();
+    if local_biography
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint == &value)
+    {
+        return;
+    }
+    let mut endpoints = local_biography.endpoints.clone();
+    endpoints.push(value);
+    if let Ok(next) = Biography::new(
+        identity,
+        endpoints,
+        local_biography.description.clone(),
+        local_biography.tags.clone(),
+    ) {
+        if state.biographies.upsert(&next).is_ok() {
+            *local_biography = next;
+            publish_biography(swarm, local_biography, config);
+        }
     }
 }
 

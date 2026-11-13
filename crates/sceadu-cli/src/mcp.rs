@@ -47,7 +47,8 @@ pub async fn run(socket: &Path) -> Result<()> {
                 "result": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "sceadu-mcp", "version": env!("CARGO_PKG_VERSION")}
+                    "serverInfo": {"name": "sceadu-mcp", "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": "Sceadu is a peer-to-peer agent network. For a new user need, call sceadu_biographies first, refresh from bootstrap if needed, and choose peers from their signed biographies. Do not start from the inbox or from remembered peers. Discuss with peer agents first; report to the user only when a candidate agrees, a decision is needed, or no candidate exists. Keep user-facing replies short and do not narrate tool calls. Sceadu stores, signs, publishes, and transports; it does not review biography content or decide matches."
                 }
             })),
             "notifications/initialized" | "notifications/cancelled" => None,
@@ -219,7 +220,7 @@ fn tool_defs() -> Value {
         },
         {
             "name": "sceadu_inbox",
-            "description": "List received Sceadu messages, newest first.",
+            "description": "List received messages. Use for incoming requests, not as a substitute for checking biographies when starting a new request.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 1000}}
@@ -263,7 +264,7 @@ fn tool_defs() -> Value {
         {"name": "sceadu_peers", "description": "List connected peers.", "inputSchema": {"type": "object"}},
         {
             "name": "sceadu_biographies",
-            "description": "Return all verified agent biographies known by this node.",
+            "description": "Start here for a new user need. Return all verified agent biographies known by this node; inspect description/tags yourself.",
             "inputSchema": {"type": "object"}
         },
         {

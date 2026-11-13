@@ -716,7 +716,7 @@ async fn run_node(
     loop {
         tokio::select! {
             _ = refresh.tick() => {
-                publish_biography(&mut swarm, &local_biography, &config);
+                publish_biography(&mut swarm, &local_biography, &state, &config);
             }
             event = swarm.select_next_some() => {
                 handle_event(
@@ -993,14 +993,47 @@ fn handle_response(
 fn publish_biography(
     swarm: &mut Swarm<Behaviour>,
     local_biography: &Biography,
+    state: &NodeState,
     config: &NodeConfig,
 ) {
+    let local_peer = *swarm.local_peer_id();
+    let mut seen = HashSet::new();
+    let mut targets: Vec<Multiaddr> = Vec::new();
+
+    // Publish to every known neighbor, not just the bootstrap seed.
+    for biography in state.biographies.all().unwrap_or_default() {
+        if biography.agent_id == local_biography.agent_id {
+            continue;
+        }
+        for endpoint in biography.endpoints {
+            let Ok(address) = endpoint.parse::<Multiaddr>() else {
+                continue;
+            };
+            let Some(peer) = peer_from_multiaddr(&address) else {
+                continue;
+            };
+            if peer == local_peer || !seen.insert(peer) {
+                continue;
+            }
+            targets.push(address);
+        }
+    }
     for address in &config.bootstrap {
         let Some(peer) = peer_from_multiaddr(address) else {
             continue;
         };
+        if peer == local_peer || !seen.insert(peer) {
+            continue;
+        }
+        targets.push(address.clone());
+    }
+
+    for address in targets {
+        let Some(peer) = peer_from_multiaddr(&address) else {
+            continue;
+        };
         if !swarm.is_connected(&peer) {
-            let _ = swarm.dial(address.clone());
+            let _ = swarm.dial(address);
         }
         let _ = swarm.behaviour_mut().rpc.send_request(
             &peer,
@@ -1086,7 +1119,7 @@ fn handle_command(
             true
         }
         Command::PublishBiography => {
-            publish_biography(swarm, local_biography, config);
+            publish_biography(swarm, local_biography, state, config);
             true
         }
         Command::BiographyUpdate {
@@ -1108,7 +1141,7 @@ fn handle_command(
                         return true;
                     }
                     *local_biography = next.clone();
-                    publish_biography(swarm, local_biography, config);
+                    publish_biography(swarm, local_biography, state, config);
                     let _ = reply.send(Ok(next));
                 }
                 Err(error) => {
@@ -1223,7 +1256,7 @@ fn add_biography_endpoint(
     ) {
         if state.biographies.upsert(&next).is_ok() {
             *local_biography = next;
-            publish_biography(swarm, local_biography, config);
+            publish_biography(swarm, local_biography, state, config);
         }
     }
 }

@@ -46,36 +46,33 @@ fn init_and_id_keep_the_same_agent_id() {
 }
 
 #[test]
-fn manifest_round_trips_through_verify() {
+fn biography_round_trips_through_verify() {
     let directory = TempDir::new().unwrap();
     let init = run_json(&directory, "correct horse battery staple", &["init"]);
     assert!(init.status.success());
 
-    let manifest = run_json(
+    let biography = run_json(
         &directory,
         "correct horse battery staple",
-        &["manifest", "--skill", "tennis"],
+        &["biography", "--tag", "tennis"],
     );
-    let manifest_json = parse_json(&manifest);
-    let manifest_path = directory.path().join("manifest.json");
+    let biography_json = parse_json(&biography);
+    let biography_path = directory.path().join("biography.json");
     fs::write(
-        &manifest_path,
-        serde_json::to_vec_pretty(&manifest_json).unwrap(),
+        &biography_path,
+        serde_json::to_vec_pretty(&biography_json).unwrap(),
     )
     .unwrap();
 
     let mut command = Command::cargo_bin("sceadu").unwrap();
     let output = command
-        .args(["verify", manifest_path.to_str().unwrap()])
+        .args(["verify", biography_path.to_str().unwrap()])
         .output()
         .unwrap();
     let verified = parse_json(&output);
 
     assert_eq!(verified["valid"], true);
-    assert_eq!(
-        verified["agent_id"],
-        manifest_json["body"]["agent_id"].clone()
-    );
+    assert_eq!(verified["agent_id"], biography_json["agent_id"].clone());
 }
 
 #[test]
@@ -253,7 +250,7 @@ fn daemon_rejects_ipv4_and_unspecified_listen() {
 }
 
 #[test]
-fn manifest_rejects_ipv4_endpoint_and_accepts_ipv6() {
+fn biography_rejects_ipv4_endpoint_and_accepts_ipv6() {
     let directory = TempDir::new().unwrap();
     let init = run_json(&directory, "correct horse battery staple", &["init"]);
     assert!(init.status.success());
@@ -268,7 +265,7 @@ fn manifest_rejects_ipv4_endpoint_and_accepts_ipv6() {
             identity_path.to_str().unwrap(),
             "--passphrase-file",
             passphrase_file.as_str(),
-            "manifest",
+            "biography",
             "--endpoint",
             "/ip4/127.0.0.1/tcp/4001",
         ])
@@ -284,14 +281,14 @@ fn manifest_rejects_ipv4_endpoint_and_accepts_ipv6() {
             identity_path.to_str().unwrap(),
             "--passphrase-file",
             passphrase_file.as_str(),
-            "manifest",
+            "biography",
             "--endpoint",
             "/ip6/::1/tcp/4001",
         ])
         .output()
         .unwrap();
-    let manifest = parse_json(&good_output);
-    assert_eq!(manifest["body"]["endpoints"][0], "/ip6/::1/tcp/4001");
+    let biography = parse_json(&good_output);
+    assert_eq!(biography["endpoints"][0], "/ip6/::1/tcp/4001");
 }
 
 #[test]

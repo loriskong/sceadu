@@ -10,9 +10,9 @@ use sceadu_core::agent::{AgentMessage, Part, TextPart};
 use sceadu_core::daemon::{self, IpcRequest, IpcResponse};
 use sceadu_core::keystore;
 use sceadu_core::{
-    ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, AgentId, ConnectivityPolicy, DiscoveryConfig,
-    Identity, InviteTicket, Manifest, ManifestBody, Multiaddr, NeighborPolicy, NodeConfig,
-    SessionConfig, Skill, TransportConfig,
+    ensure_ipv6_listen_addr, ensure_ipv6_peer_addr, AgentId, Biography, ConnectivityPolicy,
+    Identity, InviteTicket, Multiaddr, NodeConfig, SessionConfig, TransportConfig,
+    DEFAULT_BOOTSTRAP,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -45,17 +45,17 @@ enum Command {
     Init,
     /// Print the AgentID from an existing keystore.
     Id,
-    /// Sign a manifest with descriptive skills.
-    Manifest {
-        /// Skill ID to advertise. Repeat for multiple skills.
-        #[arg(long = "skill", default_value = "tennis")]
-        skills: Vec<String>,
-        /// Endpoint multiaddr. Repeat for multiple endpoints.
+    /// Build and print a signed biography.
+    Biography {
+        /// Human-readable description.
+        #[arg(long, default_value = "Sceadu agent")]
+        description: String,
+        /// Capability/region tag. Repeat.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Endpoint multiaddr. Repeat.
         #[arg(long = "endpoint")]
         endpoint: Vec<String>,
-        /// Manifest lifetime in seconds.
-        #[arg(long, default_value_t = 3600)]
-        ttl: u64,
     },
     /// Run the foreground daemon that owns the node and inbox.
     Daemon {
@@ -80,15 +80,21 @@ enum Command {
         /// AgentID allowed to deliver messages. Repeat.
         #[arg(long = "allow-agent")]
         allow_agents: Vec<AgentId>,
-        /// Neighbor policy: open or stealth.
-        #[arg(long, default_value = "open")]
-        neighbor_policy: String,
+        /// Bootstrap peer multiaddr. Repeat; overrides SCEADU_BOOTSTRAP/default.
+        #[arg(long = "bootstrap")]
+        bootstrap: Vec<Multiaddr>,
+        /// Biography description advertised to peers.
+        #[arg(long, default_value = "Sceadu agent")]
+        description: String,
+        /// Biography tag. Repeat.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
         /// SQLite inbox path.
         #[arg(long)]
         inbox: Option<PathBuf>,
-        /// Known peer address to add and dial at startup. Repeat.
-        #[arg(long = "peer")]
-        peers: Vec<Multiaddr>,
+        /// SQLite biography store path.
+        #[arg(long)]
+        biography_store: Option<PathBuf>,
         /// Idle connection timeout in seconds (default 3600).
         #[arg(long, default_value_t = 3600)]
         idle_timeout: u64,
@@ -127,21 +133,12 @@ enum Command {
     Peers,
     /// Print daemon network status.
     Status,
-    /// Discover agents through an introducer.
-    Discover {
-        /// Introducer multiaddr, including /p2p/<peer-id>.
-        #[arg(long)]
-        addr: Multiaddr,
-        /// Skill ID filter.
-        #[arg(long)]
-        skill: Option<String>,
-        #[arg(long, default_value_t = 8)]
-        max: u32,
-    },
-    /// Publish this node's manifest into the DHT.
-    Publish,
-    /// Look up an AgentID in the DHT.
-    Lookup { agent_id: AgentId },
+    /// List verified biographies known by the local daemon.
+    Biographies,
+    /// Print one biography from the local daemon.
+    BiographyGet { agent_id: AgentId },
+    /// Ask the bootstrap peer for biographies and merge them locally.
+    RefreshBiographies,
     /// Run the local MCP stdio adapter.
     Mcp,
     /// Print the installed skill path.
@@ -167,7 +164,7 @@ enum Command {
     },
     /// Verify an invite ticket and print its seed.
     Join { ticket_file: PathBuf },
-    /// Verify a signed manifest.
+    /// Verify a signed biography.
     Verify { file: PathBuf },
     /// Manage local agent skills.
     Skill {
@@ -209,14 +206,14 @@ async fn main() -> Result<()> {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             print_json(&json!({"agent_id": identity.agent_id().to_string()}))?;
         }
-        Command::Manifest {
-            skills,
+        Command::Biography {
+            description,
+            tags,
             endpoint,
-            ttl,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
-            let manifest = build_manifest(&identity, skills, endpoint, ttl)?;
-            print_json(&manifest)?;
+            let biography = build_biography(&identity, description, tags, endpoint)?;
+            print_json(&biography)?;
         }
         Command::Daemon {
             listen,
@@ -226,9 +223,11 @@ async fn main() -> Result<()> {
             tor_proxy,
             onion,
             allow_agents,
-            neighbor_policy,
+            bootstrap,
+            description,
+            tags,
             inbox,
-            peers,
+            biography_store,
             idle_timeout,
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
@@ -249,18 +248,24 @@ async fn main() -> Result<()> {
                     tor_proxy,
                     onion,
                 },
-                discovery: DiscoveryConfig {
-                    neighbor_policy: parse_neighbor_policy(&neighbor_policy)?,
-                },
                 session: SessionConfig {
                     idle_connection_timeout: Duration::from_secs(idle_timeout.max(1)),
                     dial_timeout: Duration::from_secs(5),
                 },
-                agent: sceadu_core::AgentConfig::default(),
+                agent: sceadu_core::AgentConfig {
+                    description,
+                    tags,
+                    ..Default::default()
+                },
                 allowed_agents: allow_agents,
-                inbox_path: Some(inbox_path),
+                inbox_path: Some(inbox_path.clone()),
                 file_store_path: Some(file_store_path),
-                peers,
+                biography_store_path: biography_store.or_else(|| {
+                    inbox_path
+                        .parent()
+                        .map(|parent| parent.join("biographies.sqlite"))
+                }),
+                bootstrap: bootstrap_peers(bootstrap)?,
             };
             daemon::run(identity, Some(listen), config, socket_path(&cli.socket)?).await?;
         }
@@ -322,30 +327,22 @@ async fn main() -> Result<()> {
             let response = call(&cli.socket, IpcRequest::Status).await?;
             print_response(response)?;
         }
-        Command::Discover { addr, skill, max } => {
-            let response = call(
-                &cli.socket,
-                IpcRequest::Discover {
-                    introducers: vec![addr.to_string()],
-                    skill,
-                    max,
-                },
-            )
-            .await?;
+        Command::Biographies => {
+            let response = call(&cli.socket, IpcRequest::Biographies).await?;
             print_response(response)?;
         }
-        Command::Publish => {
-            let response = call(&cli.socket, IpcRequest::Publish).await?;
-            print_response(response)?;
-        }
-        Command::Lookup { agent_id } => {
+        Command::BiographyGet { agent_id } => {
             let response = call(
                 &cli.socket,
-                IpcRequest::Lookup {
+                IpcRequest::Biography {
                     agent_id: agent_id.to_string(),
                 },
             )
             .await?;
+            print_response(response)?;
+        }
+        Command::RefreshBiographies => {
+            let response = call(&cli.socket, IpcRequest::RefreshBiographies).await?;
             print_response(response)?;
         }
         Command::Mcp => {
@@ -411,13 +408,16 @@ async fn main() -> Result<()> {
         Command::Verify { file } => {
             let contents = fs::read_to_string(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            let manifest: Manifest = serde_json::from_str(&contents)
+            let biography: Biography = serde_json::from_str(&contents)
                 .with_context(|| format!("failed to parse {}", file.display()))?;
-            let agent_id = manifest.verify().context("manifest verification failed")?;
+            let agent_id = biography
+                .verify()
+                .context("biography verification failed")?;
             print_json(&json!({
                 "valid": true,
                 "agent_id": agent_id.to_string(),
-                "skills": manifest.body.skills
+                "description": biography.description,
+                "tags": biography.tags
             }))?;
         }
     }
@@ -457,14 +457,6 @@ fn parse_connectivity_policy(value: &str) -> Result<ConnectivityPolicy> {
         "relay" => Ok(ConnectivityPolicy::Relay),
         "privacy" => Ok(ConnectivityPolicy::Privacy),
         _ => bail!("connectivity must be 'auto', 'direct', 'relay', or 'privacy'"),
-    }
-}
-
-fn parse_neighbor_policy(value: &str) -> Result<NeighborPolicy> {
-    match value {
-        "open" => Ok(NeighborPolicy::Open),
-        "stealth" => Ok(NeighborPolicy::Stealth),
-        _ => bail!("neighbor policy must be 'open' or 'stealth'"),
     }
 }
 
@@ -550,16 +542,12 @@ fn read_passphrase(file: Option<&Path>, confirm: bool) -> Result<Zeroizing<Strin
     Ok(passphrase)
 }
 
-fn build_manifest(
+fn build_biography(
     identity: &Identity,
-    skill_ids: Vec<String>,
+    description: String,
+    tags: Vec<String>,
     endpoints: Vec<String>,
-    ttl: u64,
-) -> Result<Manifest> {
-    let mut body = ManifestBody::new(identity.agent_id(), 1, ttl);
-    for id in skill_ids {
-        body.skills.push(Skill::new(id));
-    }
+) -> Result<Biography> {
     let endpoints = if endpoints.is_empty() {
         vec!["/ip6/::1/tcp/0".to_owned()]
     } else {
@@ -571,9 +559,37 @@ fn build_manifest(
             .with_context(|| format!("invalid endpoint multiaddr: {value}"))?;
         ensure_ipv6_peer_addr(&address)?;
     }
-    body.endpoints = endpoints;
-    body.protocols.push("/sceadu/message/1.0.0".to_owned());
-    Ok(Manifest::sign(body, identity)?)
+    let tags = if tags.is_empty() {
+        vec!["tennis".to_owned()]
+    } else {
+        tags
+    };
+    Ok(Biography::new(identity, endpoints, description, tags)?)
+}
+
+fn bootstrap_peers(cli: Vec<Multiaddr>) -> Result<Vec<Multiaddr>> {
+    if !cli.is_empty() {
+        return Ok(cli);
+    }
+    if let Ok(value) = std::env::var("SCEADU_BOOTSTRAP") {
+        if !value.trim().is_empty() {
+            return value
+                .split(',')
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<Multiaddr>()
+                        .with_context(|| format!("invalid SCEADU_BOOTSTRAP multiaddr: {value}"))
+                })
+                .collect();
+        }
+    }
+    if DEFAULT_BOOTSTRAP.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![DEFAULT_BOOTSTRAP
+        .parse::<Multiaddr>()
+        .context("invalid DEFAULT_BOOTSTRAP multiaddr")?])
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<()> {

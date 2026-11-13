@@ -7,14 +7,12 @@ pub enum Error {
     InvalidSignatureEncoding,
     #[error("signature verification failed")]
     InvalidSignature,
-    #[error("manifest expired")]
-    Expired,
-    #[error("manifest is not yet valid")]
-    NotYetValid,
-    #[error("unsupported manifest version {0}")]
+    #[error("unsupported biography version {0}")]
     UnsupportedVersion(u32),
-    #[error("manifest agent id does not match the signing identity")]
+    #[error("biography agent id does not match the signing identity")]
     AgentIdMismatch,
+    #[error("invalid biography: {0}")]
+    InvalidBiography(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("keystore already exists")]
@@ -45,8 +43,6 @@ pub enum Error {
     Request(String),
     #[error("peer mismatch: expected {expected}, got {actual}")]
     PeerMismatch { expected: String, actual: String },
-    #[error("DHT error: {0}")]
-    Dht(String),
     #[error("invite error: {0}")]
     Invite(String),
     #[error("Tor plugin unavailable: {0}")]

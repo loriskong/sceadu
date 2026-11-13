@@ -6,7 +6,7 @@ capabilities, acceptance criteria, or business semantics.
 ## Protocol IDs
 
 ```text
-request/response: /sceadu/message/1.0.0
+request/response: /sceadu/biography/1.0.0
 file stream:      /sceadu/file/1.0.0
 ```
 

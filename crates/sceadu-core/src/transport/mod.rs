@@ -52,7 +52,7 @@ impl ConnectivityPolicy {
     }
 }
 
-/// Transport names used in status and future manifests.
+/// Transport names used in status and future biographies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportKind {

@@ -13,34 +13,26 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 use crate::agent::AgentMessage;
-use crate::identity::{ContactRecord, Manifest};
+use crate::identity::Biography;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const PROTOCOL: &str = "/sceadu/message/1.0.0";
+pub(crate) const PROTOCOL: &str = "/sceadu/biography/1.0.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum RpcRequest {
-    Manifest(Box<Manifest>),
-    Neighbors {
-        skill: Option<String>,
-        max: u32,
-        nonce: u64,
+    /// Publish or refresh a signed biography.
+    Biography(Box<Biography>),
+    /// Return biographies known by the receiver.
+    Biographies {
+        limit: u32,
     },
     Message(Box<AgentMessage>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum RpcResponse {
-    Manifest(Box<Manifest>),
-    Neighbors {
-        records: Vec<ContactRecord>,
-        nonce: u64,
-        policy: String,
-    },
-    MessageAck {
-        message_id: String,
-    },
-    Error {
-        message: String,
-    },
+    BiographyAck,
+    Biographies { biographies: Vec<Biography> },
+    MessageAck { message_id: String },
+    Error { message: String },
 }

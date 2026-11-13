@@ -80,16 +80,36 @@ async fn call_tool(socket: &Path, params: &Value) -> Result<Value> {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let request = match name {
-        "sceadu_send" => IpcRequest::Send {
-            to: required_str(&args, "to")?,
-            message: serde_json::from_value(
-                args.get("message")
-                    .cloned()
-                    .ok_or_else(|| anyhow!("message is required"))?,
-            )?,
-        },
+        "sceadu_send" => {
+            if let Some(text) = args.get("text").and_then(Value::as_str) {
+                IpcRequest::SendText {
+                    to: args
+                        .get("to")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    peer_agent_id: required_str(&args, "peer_agent_id")?.parse()?,
+                    text: text.to_owned(),
+                    context_id: args
+                        .get("context_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                }
+            } else {
+                IpcRequest::Send {
+                    to: required_str(&args, "to")?,
+                    message: serde_json::from_value(
+                        args.get("message")
+                            .cloned()
+                            .ok_or_else(|| anyhow!("message or text is required"))?,
+                    )?,
+                }
+            }
+        }
         "sceadu_send_text" => IpcRequest::SendText {
-            to: required_str(&args, "to")?,
+            to: args
+                .get("to")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             peer_agent_id: required_str(&args, "peer_agent_id")?.parse()?,
             text: required_str(&args, "text")?,
             context_id: args
@@ -119,9 +139,11 @@ async fn call_tool(socket: &Path, params: &Value) -> Result<Value> {
         },
         "sceadu_status" => IpcRequest::Status,
         "sceadu_peers" => IpcRequest::Peers,
-        "sceadu_lookup" => IpcRequest::Lookup {
+        "sceadu_biographies" => IpcRequest::Biographies,
+        "sceadu_biography" => IpcRequest::Biography {
             agent_id: required_str(&args, "agent_id")?,
         },
+        "sceadu_refresh_biographies" => IpcRequest::RefreshBiographies,
         _ => return Err(anyhow!("unknown tool: {name}")),
     };
     let response = daemon::call(socket, &request).await?;
@@ -158,19 +180,21 @@ fn tool_defs() -> Value {
     json!([
         {
             "name": "sceadu_send",
-            "description": "Send an A2A-inspired AgentMessage to a Sceadu peer. The message must include a to AgentID and at least one part.",
+            "description": "Send a text message to a Sceadu peer. Provide the peer multiaddr, the peer AgentID, and the text.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "to": {"type": "string", "description": "Peer multiaddr including /p2p/<peer-id>"},
-                    "message": {"type": "object", "description": "AgentMessage envelope"}
+                    "peer_agent_id": {"type": "string", "description": "Target aan: AgentID"},
+                    "text": {"type": "string", "description": "Message text"},
+                    "context_id": {"type": "string"}
                 },
-                "required": ["to", "message"]
+                "required": ["peer_agent_id", "text"]
             }
         },
         {
             "name": "sceadu_send_text",
-            "description": "Send a text AgentMessage to a Sceadu peer without constructing the full JSON envelope. Provide the peer multiaddr, the peer AgentID, and the text.",
+            "description": "Send a text AgentMessage to a peer AgentID. The daemon resolves the peer endpoint from the local Biography store. Pass peer_agent_id and text; optionally override the multiaddr with to.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -179,7 +203,7 @@ fn tool_defs() -> Value {
                     "text": {"type": "string"},
                     "context_id": {"type": "string"}
                 },
-                "required": ["to", "peer_agent_id", "text"]
+                "required": ["peer_agent_id", "text"]
             }
         },
         {
@@ -227,13 +251,23 @@ fn tool_defs() -> Value {
         {"name": "sceadu_status", "description": "Return daemon network status.", "inputSchema": {"type": "object"}},
         {"name": "sceadu_peers", "description": "List connected peers.", "inputSchema": {"type": "object"}},
         {
-            "name": "sceadu_lookup",
-            "description": "Look up a signed manifest by AgentID.",
+            "name": "sceadu_biographies",
+            "description": "Return all verified agent biographies known by this node.",
+            "inputSchema": {"type": "object"}
+        },
+        {
+            "name": "sceadu_biography",
+            "description": "Return one verified biography by AgentID from the local store.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"agent_id": {"type": "string"}},
                 "required": ["agent_id"]
             }
+        },
+        {
+            "name": "sceadu_refresh_biographies",
+            "description": "Ask the configured bootstrap node for biographies and merge them locally. Use when local biographies are insufficient.",
+            "inputSchema": {"type": "object"}
         }
     ])
 }

@@ -4,7 +4,7 @@ This file is loaded by DSH-compatible agents as project context. Keep it accurat
 
 ## Project
 
-Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, discover each other through a structured DHT plus agent-mediated neighbor discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
+Sceadu is a CLI-first reference implementation of an Anonymous Agent Network (AAN). Agents join as nodes without a central server, exchange signed Biographies and agent referrals for discovery, and communicate over end-to-end encrypted peer-to-peer sessions. The product is a CLI distributed as a skill for locally installed agents.
 
 Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protocol is removed. A local MCP stdio adapter and a persistent daemon inbox exist. The MVP is defined in section 4.3 of the design document.
 
@@ -24,12 +24,16 @@ Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protoco
 ## Locked MVP decisions
 
 - Rust core and desktop CLI first (Linux, macOS, Windows); mobile companion apps come after MVP.
-- DHT discovery first; agent-mediated neighbor discovery next.
+- Discovery is signed Biography exchange. Every node stores verified Biographies,
+  publishes its own to configured bootstrap peers, and serves biography queries.
+  There is no DHT, no `discover` command, and no special bootstrap protocol role.
 - No Sybil protection in alpha: invite-only / small networks. Do not add tokens, staking, or PoW silently.
 - Anonymity scope: content confidentiality and pseudonymity by default. Tor is an optional transport that can reduce network-level IP exposure; do not claim full anonymity or traffic-analysis resistance.
-- Sceadu peer transport is IPv6-only. IPv4 is rejected in listen, dial, relay, manifest endpoint, invite seed, and Tor SOCKS proxy addresses. A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped addresses are rejected. There is no external-address parameter; the bound IPv6 address is advertised.
+- Sceadu peer transport is IPv6-only. IPv4 is rejected in listen, dial, relay, biography endpoint, invite seed, and Tor SOCKS proxy addresses. A listener must be a concrete `/ip6/<address>/tcp/<port>`; `::`, link-local, multicast, and IPv4-mapped addresses are rejected. There is no external-address parameter; the bound IPv6 address is advertised.
 - Connectivity policies: `auto`, `direct`, `relay`, `privacy`. `privacy` never silently falls back to clearnet. `relay` requires `--relay` or `--relay-server`; `direct` rejects `/p2p-circuit` and `/onion3` addresses. Tor is an optional IPv6 SOCKS5 plugin and requires an externally configured service.
 - The transport carries A2A-inspired `AgentMessage` envelopes. Sceadu does not define tasks, capabilities, acceptance criteria, or completion. Agents decide when a conversation is done.
+- A signed `Biography` is the discovery record: protocol, AgentID, public key, endpoints, description, tags, updated_at, signature. Nodes publish it at startup and every five minutes, and store verified biographies locally.
+- Bootstrap peers are ordinary nodes listed in configuration (`--bootstrap`, `SCEADU_BOOTSTRAP`, or `DEFAULT_BOOTSTRAP`). They have no special code path or privileges.
 - The daemon is foreground and owns the node and SQLite inbox. CLI/MCP clients use a Unix socket. There is no sender outbox; a send to an offline peer fails.
 - Demo admission is closed: `--allow-agent` is required. A future opt-in stranger mode will add discovery-driven contact, consent, rate limiting, reputation, and blocklists; do not implement it silently.
 - File transfer is a separate chunked, SHA-256-verified, resumable stream with a 50 MiB limit. Files are not base64-encoded into messages.
@@ -91,7 +95,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Repository layout
 
-- `crates/` - Rust workspace (`sceadu-core`, `sceadu-cli`); `sceadu-core/src` contains `identity`, `transport`, `discovery`, `session`, `agent`, `node.rs` composition root, and `daemon.rs` IPC server
+- `crates/` - Rust workspace (`sceadu-core`, `sceadu-cli`); `sceadu-core/src` contains `identity`, `transport`, `biography`, `discovery` (invite only), `session`, `agent`, `node.rs` composition root, and `daemon.rs` IPC server
 - `spec/` - wire format and test vectors
 - `skills/sceadu/` - agent skill files
 - `scripts/` - maintenance and CI scripts
@@ -100,4 +104,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1 and M2 are complete; M3 was replaced by the Agent message network. M4a/M4b connectivity is IPv6-only; port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 and the optional Tor plugin remain. The foreground daemon, SQLite inbox, allowlist admission, A2A-inspired messages, 50 MiB file stream, and local MCP stdio adapter are implemented. Public bootstrap/relay infrastructure and QUIC remain. Remaining hardening: single-use invites, persistent reputation, stranger-mode consent/rate limits, and larger eclipse simulations.
+M1 and M2 are complete; M3 was replaced by the Agent message network. M4a/M4b connectivity is IPv6-only; port mapping, AutoNAT, DCUtR, and DHT discovery are removed. Circuit relay v2 and the optional Tor plugin remain. The foreground daemon, SQLite inbox, signed Biography store and bootstrap refresh, allowlist admission, A2A-inspired messages, 50 MiB file stream, and local MCP stdio adapter are implemented. A public bootstrap VPS is deployment configuration, not a protocol role; QUIC and stranger-mode consent remain future work. Remaining hardening: single-use invites, persistent reputation, stranger-mode consent/rate limits, and larger eclipse simulations.

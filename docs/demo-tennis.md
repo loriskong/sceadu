@@ -110,7 +110,7 @@ args = ["mcp"]
 
 The MCP tools are `sceadu_send`, `sceadu_inbox`, `sceadu_read`,
 `sceadu_reply`, `sceadu_file_send`, `sceadu_status`, `sceadu_peers`, and
-`sceadu_lookup`.
+`sceadu_biographies`.
 
 MCP does not poll. The Hermes agent chooses a strategy from the user's task:
 check once, poll on a schedule, or check after another event. Sceadu has no

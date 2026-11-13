@@ -1,6 +1,7 @@
 //! Core types for the Sceadu Anonymous Agent Network.
 
 pub mod agent;
+pub mod biography;
 pub mod daemon;
 pub mod discovery;
 pub mod identity;
@@ -9,14 +10,12 @@ pub mod session;
 pub mod transport;
 
 pub use agent::{AgentMessage, FilePart, FileRef, Inbox, Part, Role, StoredMessage, TextPart};
-pub use discovery::{InviteTicket, NeighborPolicy};
+pub use discovery::InviteTicket;
 pub use identity::keystore;
-pub use identity::{
-    AgentId, Identity, Manifest, ManifestBody, SecretSeed, Skill, MANIFEST_VERSION,
-};
+pub use identity::{AgentId, Biography, Identity, SecretSeed, BIOGRAPHY_PROTOCOL};
 pub use node::{
-    spawn, spawn_with_config, AgentConfig, DiscoveryConfig, Multiaddr, NodeConfig, NodeHandle,
-    PeerId, SessionConfig, TransportConfig,
+    spawn, spawn_with_config, AgentConfig, Multiaddr, NodeConfig, NodeHandle, PeerId,
+    SessionConfig, TransportConfig, DEFAULT_BOOTSTRAP,
 };
 
 pub use transport::TorTransport;
@@ -44,8 +43,6 @@ pub enum Error {
     Request(String),
     #[error("peer mismatch: expected {expected}, got {actual}")]
     PeerMismatch { expected: String, actual: String },
-    #[error("DHT error: {0}")]
-    Dht(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("discovery error: {0}")]

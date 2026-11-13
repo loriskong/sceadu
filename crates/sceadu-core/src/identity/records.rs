@@ -8,120 +8,109 @@ use serde::{Deserialize, Serialize};
 use super::Error;
 use crate::identity::{AgentId, Identity};
 
-/// Current manifest wire version.
-pub const MANIFEST_VERSION: u32 = 1;
+/// Current Biography wire version.
+pub const BIOGRAPHY_PROTOCOL: &str = "sceadu.biography/0.1";
+pub const MAX_BIOGRAPHY_DESCRIPTION: usize = 1024;
+pub const MAX_BIOGRAPHY_TAGS: usize = 16;
+pub const MAX_BIOGRAPHY_TAG_LEN: usize = 32;
+pub const MAX_BIOGRAPHY_ENDPOINTS: usize = 8;
 
-/// A descriptive skill advertised by an agent.
-///
-/// Skills are discovery/display metadata, not an invocation contract.
+/// A signed, structured self-description of an agent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Skill {
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-impl Skill {
-    pub fn new(id: impl Into<String>) -> Self {
-        let id = id.into();
-        Self {
-            name: id.clone(),
-            id,
-            description: String::new(),
-            tags: Vec::new(),
-        }
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = description.into();
-        self
-    }
-
-    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.tags = tags.into_iter().map(Into::into).collect();
-        self
-    }
-}
-
-/// The signed part of a manifest.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ManifestBody {
-    pub version: u32,
+pub struct Biography {
+    /// Wire protocol identifier.
+    pub protocol: String,
+    /// Self-certifying agent identifier.
     pub agent_id: AgentId,
-    pub seq: u64,
-    pub issued_at: u64,
-    pub expires_at: u64,
-    pub skills: Vec<Skill>,
+    /// Base64-encoded Ed25519 public key.
+    pub public_key: String,
+    /// Reachable multiaddrs, including `/p2p/<peer-id>`.
     pub endpoints: Vec<String>,
-    pub protocols: Vec<String>,
-    pub discoverable: bool,
-}
-
-impl ManifestBody {
-    pub fn new(agent_id: AgentId, seq: u64, ttl_seconds: u64) -> Self {
-        let issued_at = now_unix();
-        Self {
-            version: MANIFEST_VERSION,
-            agent_id,
-            seq,
-            issued_at,
-            expires_at: issued_at.saturating_add(ttl_seconds),
-            skills: Vec::new(),
-            endpoints: Vec::new(),
-            protocols: Vec::new(),
-            discoverable: true,
-        }
-    }
-
-    /// Deterministic bytes covered by the signature.
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut bytes = Vec::new();
-        ciborium::into_writer(self, &mut bytes)
-            .map_err(|error| Error::Serialization(error.to_string()))?;
-        Ok(bytes)
-    }
-}
-
-/// A signed manifest.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Manifest {
-    pub body: ManifestBody,
-    /// Base64-encoded Ed25519 signature over `body.canonical_bytes()`.
+    /// Human-readable self-description. Never include secrets or private contact details.
+    pub description: String,
+    /// Capability/region/interest labels used by agent-side matching.
+    pub tags: Vec<String>,
+    /// Unix seconds when this record was last changed.
+    pub updated_at: u64,
+    /// Base64-encoded Ed25519 signature over the canonical unsigned record.
     pub signature: String,
 }
 
-impl Manifest {
-    pub fn sign(body: ManifestBody, identity: &Identity) -> Result<Self, Error> {
-        if body.agent_id != identity.agent_id() {
+#[derive(Serialize)]
+struct Unsigned<'a> {
+    protocol: &'a str,
+    agent_id: &'a AgentId,
+    public_key: &'a str,
+    endpoints: &'a [String],
+    description: &'a str,
+    tags: &'a [String],
+    updated_at: u64,
+}
+
+impl Biography {
+    pub fn new(
+        identity: &Identity,
+        endpoints: Vec<String>,
+        description: impl Into<String>,
+        tags: Vec<String>,
+    ) -> Result<Self, Error> {
+        let public_key = STANDARD.encode(identity.verifying_key().as_bytes());
+        let mut biography = Self {
+            protocol: BIOGRAPHY_PROTOCOL.to_owned(),
+            agent_id: identity.agent_id(),
+            public_key,
+            endpoints,
+            description: description.into(),
+            tags,
+            updated_at: now_unix(),
+            signature: String::new(),
+        };
+        biography.validate_fields()?;
+        biography.sign(identity)?;
+        Ok(biography)
+    }
+
+    fn unsigned(&self) -> Unsigned<'_> {
+        Unsigned {
+            protocol: &self.protocol,
+            agent_id: &self.agent_id,
+            public_key: &self.public_key,
+            endpoints: &self.endpoints,
+            description: &self.description,
+            tags: &self.tags,
+            updated_at: self.updated_at,
+        }
+    }
+
+    fn canonical_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&self.unsigned(), &mut bytes)
+            .map_err(|error| Error::Serialization(error.to_string()))?;
+        Ok(bytes)
+    }
+
+    pub fn sign(&mut self, identity: &Identity) -> Result<(), Error> {
+        if self.agent_id != identity.agent_id() {
             return Err(Error::AgentIdMismatch);
         }
-
-        let payload = body.canonical_bytes()?;
+        let payload = self.canonical_bytes()?;
         let signature = identity.sign(&payload);
-
-        Ok(Self {
-            body,
-            signature: STANDARD.encode(signature.to_bytes()),
-        })
+        self.signature = STANDARD.encode(signature.to_bytes());
+        Ok(())
     }
 
     pub fn verify(&self) -> Result<AgentId, Error> {
-        self.verify_at(now_unix())
-    }
-
-    pub fn verify_at(&self, now: u64) -> Result<AgentId, Error> {
-        if self.body.version != MANIFEST_VERSION {
-            return Err(Error::UnsupportedVersion(self.body.version));
+        self.validate_fields()?;
+        if self.protocol != BIOGRAPHY_PROTOCOL {
+            return Err(Error::UnsupportedVersion(1));
         }
-        if now < self.body.issued_at {
-            return Err(Error::NotYetValid);
-        }
-        if now > self.body.expires_at {
-            return Err(Error::Expired);
+        let public_key = STANDARD
+            .decode(&self.public_key)
+            .map_err(|_| Error::InvalidAgentId)?;
+        let public_key: [u8; 32] = public_key.try_into().map_err(|_| Error::InvalidAgentId)?;
+        let expected = AgentId::from_bytes(&public_key)?;
+        if expected != self.agent_id {
+            return Err(Error::AgentIdMismatch);
         }
 
         let signature_bytes = STANDARD
@@ -129,15 +118,39 @@ impl Manifest {
             .map_err(|_| Error::InvalidSignatureEncoding)?;
         let signature =
             Signature::from_slice(&signature_bytes).map_err(|_| Error::InvalidSignatureEncoding)?;
-        let payload = self.body.canonical_bytes()?;
-
-        self.body
-            .agent_id
+        let payload = self.canonical_bytes()?;
+        expected
             .verifying_key()
             .verify_strict(&payload, &signature)
             .map_err(|_| Error::InvalidSignature)?;
+        Ok(self.agent_id.clone())
+    }
 
-        Ok(self.body.agent_id.clone())
+    fn validate_fields(&self) -> Result<(), Error> {
+        if self.description.len() > MAX_BIOGRAPHY_DESCRIPTION {
+            return Err(Error::InvalidBiography(
+                "description is too long".to_owned(),
+            ));
+        }
+        if self.endpoints.len() > MAX_BIOGRAPHY_ENDPOINTS {
+            return Err(Error::InvalidBiography(
+                "biography may contain at most 8 endpoints".to_owned(),
+            ));
+        }
+        if self.tags.len() > MAX_BIOGRAPHY_TAGS {
+            return Err(Error::InvalidBiography("too many tags".to_owned()));
+        }
+        for tag in &self.tags {
+            if tag.is_empty()
+                || tag.len() > MAX_BIOGRAPHY_TAG_LEN
+                || !tag
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            {
+                return Err(Error::InvalidBiography(format!("invalid tag: {tag}")));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -152,70 +165,48 @@ fn now_unix() -> u64 {
 mod tests {
     use super::*;
 
-    fn body(identity: &Identity) -> ManifestBody {
-        let mut body = ManifestBody::new(identity.agent_id(), 1, 3600);
-        body.skills.push(Skill::new("tennis"));
-        body.endpoints.push("/ip6/::1/tcp/4001".to_owned());
-        body.protocols.push("/sceadu/echo/1.0.0".to_owned());
-        body
+    fn biography(identity: &Identity) -> Biography {
+        Biography::new(
+            identity,
+            vec!["/ip6/::1/tcp/4001".to_owned()],
+            "test agent",
+            vec!["tennis".to_owned()],
+        )
+        .unwrap()
     }
 
     #[test]
     fn signs_and_verifies() {
         let identity = Identity::from_seed([1u8; 32]);
-        let manifest = Manifest::sign(body(&identity), &identity).unwrap();
-
-        assert_eq!(manifest.verify_at(now_unix()).unwrap(), identity.agent_id());
+        assert_eq!(biography(&identity).verify().unwrap(), identity.agent_id());
     }
 
     #[test]
     fn rejects_tampering() {
         let identity = Identity::from_seed([2u8; 32]);
-        let mut manifest = Manifest::sign(body(&identity), &identity).unwrap();
-        manifest.body.skills[0].id = "other".to_owned();
-
-        assert!(matches!(
-            manifest.verify_at(now_unix()),
-            Err(Error::InvalidSignature)
-        ));
+        let mut value = biography(&identity);
+        value.tags.push("other".to_owned());
+        assert!(matches!(value.verify(), Err(Error::InvalidSignature)));
     }
 
     #[test]
-    fn rejects_expired_manifest() {
-        let identity = Identity::from_seed([3u8; 32]);
-        let mut manifest = Manifest::sign(body(&identity), &identity).unwrap();
-        manifest.body.expires_at = manifest.body.issued_at + 10;
-
+    fn rejects_agent_id_mismatch() {
+        let signer = Identity::from_seed([3u8; 32]);
+        let other = Identity::from_seed([4u8; 32]);
         assert!(matches!(
-            manifest.verify_at(manifest.body.expires_at + 1),
-            Err(Error::Expired)
-        ));
-    }
-
-    #[test]
-    fn rejects_not_yet_valid_manifest() {
-        let identity = Identity::from_seed([4u8; 32]);
-        let mut manifest = Manifest::sign(body(&identity), &identity).unwrap();
-        manifest.body.issued_at = 1_000;
-
-        assert!(matches!(manifest.verify_at(999), Err(Error::NotYetValid)));
-    }
-
-    #[test]
-    fn rejects_agent_id_mismatch_when_signing() {
-        let signer = Identity::from_seed([5u8; 32]);
-        let other = Identity::from_seed([6u8; 32]);
-
-        assert!(matches!(
-            Manifest::sign(body(&other), &signer),
+            Biography::new(&signer, vec!["/ip6/::1/tcp/4001".to_owned()], "x", vec![]).and_then(
+                |mut value| {
+                    value.agent_id = other.agent_id();
+                    value.sign(&signer)
+                }
+            ),
             Err(Error::AgentIdMismatch)
         ));
     }
-}
 
-/// A signed manifest observed during discovery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContactRecord {
-    pub manifest: Manifest,
-    pub observed_at: u64,
+    #[test]
+    fn accepts_empty_endpoints_for_relay_only_nodes() {
+        let identity = Identity::from_seed([5u8; 32]);
+        assert!(Biography::new(&identity, vec![], "x", vec![]).is_ok());
+    }
 }

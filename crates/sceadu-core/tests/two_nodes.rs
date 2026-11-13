@@ -14,7 +14,7 @@ fn message(from: &Identity, to: &Identity, text: &str) -> AgentMessage {
 }
 
 #[tokio::test]
-async fn two_nodes_exchange_manifests_and_messages() {
+async fn two_nodes_exchange_biographys_and_messages() {
     let server_identity = Identity::generate();
     let client_identity = Identity::generate();
 
@@ -31,11 +31,11 @@ async fn two_nodes_exchange_manifests_and_messages() {
     let peer = client.dial(server_addr).await.expect("dial succeeds");
     assert_eq!(peer, server.peer_id());
 
-    let manifest = client
-        .request_manifest(peer)
+    let biography = client
+        .request_biography(peer)
         .await
-        .expect("manifest exchange succeeds");
-    assert_eq!(&manifest.body.agent_id, server.agent_id());
+        .expect("biography exchange succeeds");
+    assert_eq!(&biography.agent_id, server.agent_id());
 
     client
         .send_message(peer, message(&client_identity, &server_identity, "hello"))

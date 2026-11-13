@@ -7,4 +7,7 @@ mod records;
 
 pub use error::Error;
 pub use keys::{AgentId, Identity, SecretSeed};
-pub use records::{ContactRecord, Manifest, ManifestBody, Skill, MANIFEST_VERSION};
+pub use records::{
+    Biography, BIOGRAPHY_PROTOCOL, MAX_BIOGRAPHY_DESCRIPTION, MAX_BIOGRAPHY_ENDPOINTS,
+    MAX_BIOGRAPHY_TAGS, MAX_BIOGRAPHY_TAG_LEN,
+};

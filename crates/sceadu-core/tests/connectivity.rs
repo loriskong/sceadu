@@ -149,14 +149,14 @@ async fn relay_circuit_connects_two_peers() {
         .await
         .expect("relay dial timed out")
         .unwrap();
-    let manifest = tokio::time::timeout(
+    let biography = tokio::time::timeout(
         Duration::from_secs(10),
-        client.request_manifest(server_peer),
+        client.request_biography(server_peer),
     )
     .await
     .expect("relay request timed out")
     .unwrap();
-    assert_eq!(manifest.body.agent_id, server_identity.agent_id());
+    assert_eq!(biography.agent_id, server_identity.agent_id());
 
     client.shutdown().await;
     server.shutdown().await;
@@ -212,7 +212,7 @@ async fn privacy_loopback_listener_requires_onion() {
 }
 
 #[tokio::test]
-async fn privacy_manifest_advertises_only_the_onion_endpoint() {
+async fn privacy_biography_advertises_only_the_onion_endpoint() {
     use data_encoding::BASE32_NOPAD;
 
     let identity = Identity::generate();
@@ -363,8 +363,8 @@ async fn privacy_tor_transport_dials_through_socks() {
     .unwrap();
 
     let peer = client.dial(onion).await.unwrap();
-    let manifest = client.request_manifest(peer).await.unwrap();
-    assert_eq!(manifest.body.agent_id, server_identity.agent_id());
+    let biography = client.request_biography(peer).await.unwrap();
+    assert_eq!(biography.agent_id, server_identity.agent_id());
 
     client.shutdown().await;
     server.shutdown().await;

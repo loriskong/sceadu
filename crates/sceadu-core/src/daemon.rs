@@ -22,7 +22,8 @@ pub enum IpcRequest {
         message: AgentMessage,
     },
     SendText {
-        to: String,
+        #[serde(default)]
+        to: Option<String>,
         peer_agent_id: AgentId,
         text: String,
         #[serde(default)]
@@ -42,17 +43,11 @@ pub enum IpcRequest {
         to: Option<String>,
     },
     Status,
-    Lookup {
+    Biographies,
+    Biography {
         agent_id: String,
     },
-    Discover {
-        introducers: Vec<String>,
-        #[serde(default)]
-        skill: Option<String>,
-        #[serde(default = "default_limit")]
-        max: u32,
-    },
-    Publish,
+    RefreshBiographies,
     Peers,
     FileSend {
         to: String,
@@ -194,7 +189,18 @@ async fn dispatch(request: IpcRequest, node: Arc<NodeHandle>) -> IpcResponse {
             if let Err(error) = message.validate() {
                 return IpcResponse::error(error.to_string());
             }
-            send_to(&node, &to, message)
+            let address = match to {
+                Some(address) => address,
+                None => match node.biography(&peer_agent_id) {
+                    Ok(Some(biography)) => match biography.endpoints.first() {
+                        Some(address) => address.clone(),
+                        None => return IpcResponse::error("biography has no endpoints"),
+                    },
+                    Ok(None) => return IpcResponse::error("unknown agent biography"),
+                    Err(error) => return IpcResponse::error(error.to_string()),
+                },
+            };
+            send_to(&node, &address, message)
                 .await
                 .map(|_| json!({"status": "delivered"}))
         }
@@ -222,20 +228,17 @@ async fn dispatch(request: IpcRequest, node: Arc<NodeHandle>) -> IpcResponse {
             .await
             .map(|_| json!({"status": "delivered"})),
         IpcRequest::Status => node.network_status().await.map(|status| json!(status)),
-        IpcRequest::Lookup { agent_id } => {
+        IpcRequest::Biographies => node.biographies().map(|biographies| json!(biographies)),
+        IpcRequest::Biography { agent_id } => {
             let Ok(agent_id) = agent_id.parse::<AgentId>() else {
                 return IpcResponse::error("invalid agent id");
             };
-            node.lookup(agent_id).await.map(|manifest| json!(manifest))
+            node.biography(&agent_id).map(|biography| json!(biography))
         }
-        IpcRequest::Discover {
-            introducers,
-            skill,
-            max,
-        } => discover(&node, &introducers, skill, max)
+        IpcRequest::RefreshBiographies => node
+            .refresh_biographies()
             .await
-            .map(|records| json!(records)),
-        IpcRequest::Publish => node.publish().await.map(|_| json!({"status": "published"})),
+            .map(|biographies| json!(biographies)),
         IpcRequest::FileSend { to, path } => {
             file_to(&node, &to, &path).await.map(|file| json!(file))
         }
@@ -314,25 +317,6 @@ async fn file_to(
         .ok_or_else(|| Error::Dial("multiaddr must include /p2p/<peer-id>".to_owned()))?;
     node.dial(address).await?;
     node.send_file(peer, path).await
-}
-
-async fn discover(
-    node: &NodeHandle,
-    introducers: &[String],
-    skill: Option<String>,
-    max: u32,
-) -> Result<Vec<crate::identity::ContactRecord>> {
-    let mut peers = Vec::new();
-    for introducer in introducers {
-        let address = introducer
-            .parse::<Multiaddr>()
-            .map_err(|error| Error::Dial(format!("invalid introducer: {error}")))?;
-        let peer = peer_from_multiaddr(&address)
-            .ok_or_else(|| Error::Dial("introducer needs /p2p/<peer-id>".to_owned()))?;
-        node.dial(address).await?;
-        peers.push(peer);
-    }
-    node.discover(&peers, skill, max, max).await
 }
 
 /// Send one IPC request and read one response.

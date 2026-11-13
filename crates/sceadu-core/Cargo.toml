@@ -3,7 +3,7 @@ name = "sceadu-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Core identity and manifest types for Sceadu"
+description = "Core identity and biography types for Sceadu"
 
 [dependencies]
 libp2p.workspace = true

@@ -1,7 +1,7 @@
 # Connectivity Policy
 
 Sceadu uses IPv6-only peer transport. IPv4 is not accepted in listen, dial,
-relay, manifest endpoint, invite seed, or SOCKS proxy addresses. The transport is
+relay, biography endpoint, invite seed, or SOCKS proxy addresses. The transport is
 TCP + Noise + Yamux. Circuit relay v2 and the optional Tor onion plugin remain available.
 
 ## Policies
@@ -51,9 +51,9 @@ EndpointRecord {
 
 Dialed endpoints are added when the dial starts and marked verified when the
 connection is established. The local listen endpoint is included with source
-`listen`. When a new listen address is confirmed, the node re-signs its manifest
-with the additional endpoint. DHT records are not automatically republished
-after an endpoint change; callers should publish again.
+`listen`. When a new listen address is confirmed, the node re-signs its biography
+with the additional endpoint. Biography records are refreshed every five minutes;
+endpoint changes are included in the next signed Biography.
 
 ## `status`
 
@@ -81,13 +81,13 @@ read the status instead of inferring availability from the policy name.
 
 Relay server mode uses circuit relay v2. A relay client reserves a circuit and
 listens on `/p2p/<relay>/p2p-circuit/p2p/<self>`. Relay addresses are validated
-as IPv6 and advertised in the signed manifest.
+as IPv6 and advertised in the signed biography.
 
 Tor is a dial-only plugin inside Sceadu. `TorTransport` resolves `/onion3` to a
 base32 hostname and connects through a SOCKS5 proxy bound to an IPv6 loopback
 address, for example `[::1]:9050`. Without `--tor-proxy`, privacy/onion calls
 fail closed. Inbound onion traffic is handled by an external Tor daemon mapping
-to a loopback listener. The signed manifest advertises only the configured onion
+to a loopback listener. The signed biography advertises only the configured onion
 endpoint in `privacy` mode.
 
 ## Security

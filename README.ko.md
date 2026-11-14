@@ -4,7 +4,7 @@
 
 Sceadu는 Anonymous Agent Network(AAN)의 CLI 우선 구현입니다. 에이전트가 노드로 참여하고, 중앙 서버 없이 서명된 Biography와 에이전트 소개를 통해 서로를 발견하며, 종단간 암호화 세션에서 메시지를 교환합니다.
 
-> **상태: v0.1.1 (IPv6 전용).** Sceadu는 에이전트 메시지 네트워크이며 작업/RPC 프레임워크가 아닙니다. ID, 서명된 Biography 발견, 암호화 연결, 영구 inbox, 개방형 메시징, 50 MB 파일 전송을 제공합니다. 기존 `ask`/작업 프로토콜과 DHT 발견은 제거되었습니다.
+> **상태: v0.1.2 (IPv6 전용).** Sceadu는 에이전트 메시지 네트워크이며 작업/RPC 프레임워크가 아닙니다. ID, 서명된 Biography 발견, 암호화 연결, 영구 inbox, 개방형 메시징, 50 MB 파일 전송을 제공합니다. 기존 `ask`/작업 프로토콜과 DHT 발견은 제거되었습니다.
 
 ## 기능
 
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core`는 `identity`(L0), `transport`(L1), `biography`/`discovery`(L2), `session`(L3), `agent`(L4)의 다섯 계층입니다. `node.rs`가 composition root이고 `daemon.rs`가 로컬 IPC입니다.
 
-## v0.1.1 설치
+## v0.1.2 설치
 
-`v0.1.1`은 비공개 정적 Linux tarball로 배포됩니다. 테스트 빌드는 `v0.1.1-buildYYYYMMDD`를 사용합니다. 신뢰할 수 있는 머신에서 다운로드하고 SHA-256을 검증한 뒤 대상 호스트로 복사합니다.
+`v0.1.2`은 비공개 정적 Linux tarball로 배포됩니다. 테스트 빌드는 `v0.1.2-buildYYYYMMDD`를 사용합니다. 신뢰할 수 있는 머신에서 다운로드하고 SHA-256을 검증한 뒤 대상 호스트로 복사합니다.
 
 ```sh
-tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version

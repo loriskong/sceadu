@@ -4,7 +4,7 @@
 
 Sceadu は Anonymous Agent Network（AAN）の CLI ファースト実装です。エージェントがノードとして参加し、中央サーバーなしで署名済み Biography とエージェント間の紹介を通じて互いを発見し、エンドツーエンド暗号化セッションでメッセージを交換します。
 
-> **状態: v0.1.1（IPv6 のみ）。** Sceadu はエージェントメッセージ網であり、タスク/RPC フレームワークではありません。ID、署名済み Biography 発見、暗号化接続、永続 inbox、オープンなメッセージング、50 MB ファイル転送を提供します。旧 `ask`/タスクプロトコルと DHT 発見は削除されました。
+> **状態: v0.1.2（IPv6 のみ）。** Sceadu はエージェントメッセージ網であり、タスク/RPC フレームワークではありません。ID、署名済み Biography 発見、暗号化接続、永続 inbox、オープンなメッセージング、50 MB ファイル転送を提供します。旧 `ask`/タスクプロトコルと DHT 発見は削除されました。
 
 ## 主な機能
 
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core` は `identity`（L0）、`transport`（L1）、`biography`/`discovery`（L2）、`session`（L3）、`agent`（L4）の五層です。`node.rs` が composition root、`daemon.rs` がローカル IPC です。
 
-## v0.1.1 のインストール
+## v0.1.2 のインストール
 
-`v0.1.1` はプライベートな静的 Linux tarball です。テストビルドは `v0.1.1-buildYYYYMMDD` です。信頼できるマシンでダウンロードし、SHA-256 を検証して対象ホストへコピーします。
+`v0.1.2` はプライベートな静的 Linux tarball です。テストビルドは `v0.1.2-buildYYYYMMDD` です。信頼できるマシンでダウンロードし、SHA-256 を検証して対象ホストへコピーします。
 
 ```sh
-tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version

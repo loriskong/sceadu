@@ -1,6 +1,6 @@
 # Release Convention
 
-Sceadu's Cargo version is `0.1.1`. The current tagged release is `v0.1.1`; `v0.1.0` remains available.
+Sceadu's Cargo version is `0.1.1`. The current tagged release is `v0.1.2`; `v0.1.0` and `v0.1.1` remain available.
 Test builds use:
 
 ```text
@@ -8,7 +8,7 @@ v0.1.0-buildYYYYMMDD
 ```
 
 Create at most one build tag per date. Test builds are private pre-releases;
-do not use a moving `latest` tag. `v0.1.1` is the current non-prerelease release.
+do not use a moving `latest` tag. `v0.1.2` is the current non-prerelease release.
 
 The release workflow builds a static `x86_64-unknown-linux-musl` binary and
 publishes either `sceadu-v0.1.0-...` or `sceadu-v0.1.0-buildYYYYMMDD-...`.
@@ -23,10 +23,10 @@ machine with access (for example via `gh release download`), verify the
 checksum, and copy it to the target machines:
 
 ```sh
-gh release download v0.1.1 \
-  --pattern 'sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz*'
-sha256sum -c sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz.sha256
-scp sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz sceadu-c:/tmp/
+gh release download v0.1.2 \
+  --pattern 'sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz*'
+sha256sum -c sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz.sha256
+scp sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz sceadu-c:/tmp/
 ```
 
 Then on each target:

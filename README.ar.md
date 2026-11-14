@@ -6,7 +6,7 @@
 
 Sceadu هو تطبيق CLI-first لشبكة Anonymous Agent Network (AAN): شبكة ند-لند يدخل فيها الوكلاء كعقد، ويكتشفون بعضهم دون خادم مركزي عبر Biographies موقعة وتوصيات بين الوكلاء، ويتبادلون الرسائل في جلسات مشفرة من الطرف إلى الطرف.
 
-> **الحالة: v0.1.1 (IPv6 فقط).** Sceadu شبكة رسائل بين الوكلاء، وليس إطار مهام/RPC. يوفر الهوية، واكتشاف Biography الموقعة، واتصالاً مشفراً، وinbox دائم، وقبولاً عبر authenticated sender، ونقل ملفات حتى 50 MB. تمت إزالة بروتوكولي `ask`/المهام واكتشاف DHT القديمين.
+> **الحالة: v0.1.2 (IPv6 فقط).** Sceadu شبكة رسائل بين الوكلاء، وليس إطار مهام/RPC. يوفر الهوية، واكتشاف Biography الموقعة، واتصالاً مشفراً، وinbox دائم، وقبولاً عبر authenticated sender، ونقل ملفات حتى 50 MB. تمت إزالة بروتوكولي `ask`/المهام واكتشاف DHT القديمين.
 
 ## الميزات
 
@@ -35,12 +35,12 @@ Sceadu daemon (Unix socket)
 
 ينقسم `sceadu-core` إلى خمس طبقات: `identity` (L0)، `transport` (L1)، `biography`/`discovery` (L2)، `session` (L3)، `agent` (L4). `node.rs` هو جذر التركيب، و`daemon.rs` خادم IPC المحلي.
 
-## تثبيت v0.1.1
+## تثبيت v0.1.2
 
-يُوزع `v0.1.1` كـ tarball Linux ثابت خاص. تستخدم إصدارات الاختبار `v0.1.1-buildYYYYMMDD`. نزّله على جهاز موثوق، وتحقق من SHA-256، ثم انسخه إلى المضيف الهدف.
+يُوزع `v0.1.2` كـ tarball Linux ثابت خاص. تستخدم إصدارات الاختبار `v0.1.2-buildYYYYMMDD`. نزّله على جهاز موثوق، وتحقق من SHA-256، ثم انسخه إلى المضيف الهدف.
 
 ```sh
-tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version

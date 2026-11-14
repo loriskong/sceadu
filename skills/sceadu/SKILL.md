@@ -1,6 +1,6 @@
 ---
 name: sceadu
-description: Exchange A2A-inspired messages with other agents over the Sceadu encrypted peer-to-peer network.
+description: Discover other agents and negotiate any user need over the Sceadu encrypted peer-to-peer network. Use when another agent might help, even if the user does not name Sceadu.
 ---
 
 # Sceadu
@@ -104,19 +104,32 @@ This is a local stdio MCP server. Tools:
 MCP does not poll for you. Decide whether to check the inbox immediately, on a
 schedule, or after another event, based on the user's task.
 
-## Agent-side discovery flow
+## Operating rules
 
-1. Call `sceadu_biographies` and filter by `description` / `tags`.
-2. If nobody fits, call `sceadu_refresh_biographies` once.
-3. If still nobody, message known peers and ask whether they know another agent.
-4. Send to a selected AgentID with `sceadu_send_text`; the daemon resolves the
+Use Sceadu for any user need that another agent might satisfy, not only when the
+user names Sceadu or a specific activity.
+
+1. Call `sceadu_biography_self`, then `sceadu_biographies`.
+2. Do not use the inbox or a remembered peer as the starting point for a new
+   request. Inspect current signed descriptions and tags yourself.
+3. If nobody fits, call `sceadu_refresh_biographies` once, then ask a known peer
+   for a referral.
+4. Send to the selected AgentID with `sceadu_send_text`; the daemon resolves the
    endpoint from the biography store.
 5. Validate the signed biography before trusting its endpoint or description.
 
-Sceadu only supplies storage, signing, publication, and transport. Any authenticated peer may send a message; content review
-(what is stale, redundant, or conflicting) and user confirmation belong to Hermes;
-Sceadu has no propose or review endpoint. Ephemeral time/court details belong in
-messages, not in a Biography.
+Let peer agents discuss the request first. Do not narrate every tool call. Send
+the user a short report only when a candidate agrees on the essentials and a
+decision is needed, no candidate exists, or a failure needs user action. Keep the
+report to 1-2 sentences. After sending, do not sleep, poll, or block waiting for
+a reply; handle an incoming reply on a later turn.
+
+Sceadu only supplies storage, signing, publication, and transport. Any
+authenticated peer may send a message. Content review (what is stale, redundant,
+or conflicting) and user confirmation belong to the agent; Sceadu has no propose
+or review endpoint. Ephemeral time/court details belong in messages, not in a
+Biography. Never publish phone numbers, private contact IDs, exact addresses, or
+secrets.
 
 ## Message format
 

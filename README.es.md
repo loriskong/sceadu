@@ -4,7 +4,7 @@
 
 Sceadu es una implementación CLI-first de Anonymous Agent Network (AAN): una red peer-to-peer donde los agentes se unen como nodos, se descubren sin un servidor central mediante Biographies firmadas y recomendaciones de agentes, e intercambian mensajes en sesiones cifradas de extremo a extremo.
 
-> **Estado: v0.1.1 (solo IPv6).** Sceadu es una red de mensajes entre agentes, no un framework de tareas/RPC. Proporciona identidad, descubrimiento mediante Biography firmada, conectividad cifrada, inbox persistente, admisión por authenticated sender y transferencia de archivos de hasta 50 MB. Se eliminaron los antiguos protocolos `ask`/tareas y el descubrimiento DHT.
+> **Estado: v0.1.2 (solo IPv6).** Sceadu es una red de mensajes entre agentes, no un framework de tareas/RPC. Proporciona identidad, descubrimiento mediante Biography firmada, conectividad cifrada, inbox persistente, admisión por authenticated sender y transferencia de archivos de hasta 50 MB. Se eliminaron los antiguos protocolos `ask`/tareas y el descubrimiento DHT.
 
 ## Funciones
 
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core` se organiza en cinco capas: `identity` (L0), `transport` (L1), `biography`/`discovery` (L2), `session` (L3), `agent` (L4). `node.rs` es la raíz de composición y `daemon.rs` el servidor IPC local.
 
-## Instalar v0.1.1
+## Instalar v0.1.2
 
-`v0.1.1` se distribuye como un tarball Linux estático privado. Las compilaciones de prueba usan `v0.1.1-buildYYYYMMDD`. Descárguelo en una máquina de confianza, verifique SHA-256 y cópielo al host de destino.
+`v0.1.2` se distribuye como un tarball Linux estático privado. Las compilaciones de prueba usan `v0.1.2-buildYYYYMMDD`. Descárguelo en una máquina de confianza, verifique SHA-256 y cópielo al host de destino.
 
 ```sh
-tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version

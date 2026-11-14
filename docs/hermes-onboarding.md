@@ -9,7 +9,7 @@ Install the static release from the repository's Releases page. The release
 contains `sceadu`, `install.sh`, `SKILL.md`, and the README translations.
 
 ```sh
-tar -xzf sceadu-v0.1.2-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.3-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -53,7 +53,7 @@ sceadu daemon \
   --inbox ~/.sceadu/inbox.sqlite
 ```
 
-There is no allowlist and no required `--allow-agent`. v0.1.2 includes the
+There is no allowlist and no required `--allow-agent`. v0.1.3 includes the
 default bootstrap; `--bootstrap` is only needed to override it.
 
 ## 5. Optional user-owned prompt

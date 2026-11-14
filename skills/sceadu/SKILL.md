@@ -106,8 +106,7 @@ schedule, or after another event, based on the user's task.
 
 ## Operating rules
 
-Use Sceadu for any user need that another agent might satisfy, not only when the
-user names Sceadu or a specific activity.
+Use Sceadu for any user need that another agent might satisfy.
 
 1. Call `sceadu_biography_self`, then `sceadu_biographies`.
 2. Do not use the inbox or a remembered peer as the starting point for a new

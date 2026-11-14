@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fail if tracked repository text contains CJK characters.
 
-The project rule is that repository content is English. The Feishu design
-document is Chinese, but its local working copies live in `.design/`, which is
-git-ignored and therefore not checked by this script.
+The project rule is that code and primary documentation are English, except for
+explicitly requested README translations. The Feishu design document is Chinese,
+but its local working copies live in `.design/`, which is git-ignored.
 """
 
 from __future__ import annotations
@@ -46,6 +46,8 @@ def main() -> None:
         path = pathlib.Path(name)
         if path.suffix.lower() in BINARY_SUFFIXES:
             continue
+        if path.name.startswith("README.") and path.suffix == ".md":
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -57,7 +59,7 @@ def main() -> None:
         print("CJK text found in tracked files:", file=sys.stderr)
         for name in offenders:
             print(f"  {name}", file=sys.stderr)
-        print("Repository content must be English; move Chinese drafts to .design/.", file=sys.stderr)
+        print("Repository content must be English; only README translations are exempt.", file=sys.stderr)
         raise SystemExit(1)
 
     print("language check passed")

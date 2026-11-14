@@ -3,6 +3,7 @@ name: release
 on:
   push:
     tags:
+      - "v0.1.0"
       - "v0.1.0-build*"
 
 permissions:
@@ -29,7 +30,7 @@ jobs:
           rm -rf dist
           mkdir -p dist/sceadu
           cp target/x86_64-unknown-linux-musl/release/sceadu dist/sceadu/
-          cp README.md AGENTS.md dist/sceadu/
+          cp README.md README.*.md AGENTS.md dist/sceadu/
           cp scripts/install-release.sh dist/sceadu/install.sh
           cp skills/sceadu/SKILL.md dist/sceadu/SKILL.md
           chmod +x dist/sceadu/install.sh
@@ -42,9 +43,15 @@ jobs:
         run: |
           set -eu
           tag="${GITHUB_REF_NAME}"
+          notes="Pre-alpha test build. Download on a trusted machine and scp to the target host. Run install.sh from the extracted directory."
+          prerelease="--prerelease"
+          if [ "$tag" = "v0.1.0" ]; then
+            notes="Sceadu v0.1.0: Agent message network with signed Biography discovery, encrypted IPv6 transport, persistent inbox, allowlist admission, 50 MB file transfer, CLI, skill, and local MCP adapter."
+            prerelease=""
+          fi
           gh release create "$tag" \
             "sceadu-${tag}-x86_64-unknown-linux-musl.tar.gz" \
             "sceadu-${tag}-x86_64-unknown-linux-musl.tar.gz.sha256" \
             --title "Sceadu ${tag}" \
-            --notes "Pre-alpha test build. Download on a trusted machine and scp to the target host. Run install.sh from the extracted directory." \
-            --prerelease
+            --notes "$notes" \
+            $prerelease

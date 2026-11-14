@@ -1,10 +1,12 @@
 # Sceadu
 
+**Languages:** [English](README.md) | [Chinese](README.zh-CN.md) | [Korean](README.ko.md) | [Japanese](README.ja.md) | [Russian](README.ru.md) | [German](README.de.md) | [French](README.fr.md) | [Spanish](README.es.md) | [Arabic](README.ar.md)
+
 Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a
 peer-to-peer network where agents join as nodes, discover each other without a
 central server, and exchange end-to-end encrypted messages.
 
-> **Status: pre-alpha (IPv6-only).** Sceadu is an Agent message network, not a
+> **Status: v0.1.0 (IPv6-only).** Sceadu is an Agent message network, not a
 > task/RPC framework. It provides identity, signed Biography discovery,
 > encrypted connectivity, a persistent inbox, allowlist admission, and 50 MB
 > file transfer. The old `ask`/task protocol and DHT discovery have been removed.
@@ -46,6 +48,11 @@ Sceadu daemon (Unix socket)
 `transport` (L1), `biography`/`discovery` (L2), `session` (L3), and `agent` (L4),
 with `node.rs` as the composition root and `daemon.rs` as the local IPC server.
 
+## Documentation languages
+
+English is the primary README. Translations live in `README.<language>.md` and
+are packaged in the release tarball.
+
 ## Demo
 
 See [docs/demo-tennis.md](docs/demo-tennis.md) for the A/B/C/D WeChat + Feishu tennis matchmaking runbook.
@@ -77,12 +84,12 @@ cargo test --all
 
 ## Install
 
-Test releases use `v0.1.0-buildYYYYMMDD` private static Linux tarballs. Download
-on a trusted machine, verify SHA-256, copy to the target host, and run the
-bundled installer:
+`v0.1.0` is distributed as a private static Linux tarball. Test builds use
+`v0.1.0-buildYYYYMMDD`. Download on a trusted machine, verify SHA-256, copy to
+the target host, and run the bundled installer:
 
 ```sh
-tar -xzf sceadu-v0.1.0-buildYYYYMMDD-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version

@@ -16,7 +16,7 @@ Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protoco
 
 ## Language policy
 
-- All repository content is English: code, comments, identifiers, commit messages, README, docs, tests, CI, and issue/PR text.
+- All repository content is English: code, comments, identifiers, commit messages, docs, tests, CI, and issue/PR text. README translations explicitly requested by the maintainer are the only exception.
 - The Feishu design document is Chinese. Do not commit Chinese design documents or generated exports to this repository.
 - Local working copies of the design document may live in `.design/`, which is git-ignored.
 - CLI output is English by default; localization is a later feature.
@@ -64,9 +64,9 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 ## Release convention
 
 - Cargo version: `0.1.0`.
-- Tag format: `v0.1.0-buildYYYYMMDD`; at most one build tag per date.
-- Releases are private pre-releases. Build assets are downloaded on a trusted machine and copied to test hosts with `scp`.
-- Assets are static `x86_64-unknown-linux-musl` tarballs with `sceadu`, `install.sh`, `SKILL.md`, `README.md`, `AGENTS.md`, and SHA-256. Target hosts do not need Rust.
+- Tag format: `vMAJOR.MINOR.PATCH` for releases (current: `v0.1.0`), and `v0.1.0-buildYYYYMMDD` for test builds; at most one build tag per date.
+- `v0.1.0` is the first tagged release. Test builds are private pre-releases. Assets are downloaded on a trusted machine and copied to hosts with `scp`.
+- Assets are static `x86_64-unknown-linux-musl` tarballs with `sceadu`, `install.sh`, `SKILL.md`, all README translations, `AGENTS.md`, and SHA-256. Target hosts do not need Rust.
 - See `docs/release.md`.
 
 ## Design document sync

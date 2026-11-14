@@ -4,7 +4,7 @@
 
 Sceadu는 Anonymous Agent Network(AAN)의 CLI 우선 구현입니다. 에이전트가 노드로 참여하고, 중앙 서버 없이 서명된 Biography와 에이전트 소개를 통해 서로를 발견하며, 종단간 암호화 세션에서 메시지를 교환합니다.
 
-> **상태: v0.1.0 (IPv6 전용).** Sceadu는 에이전트 메시지 네트워크이며 작업/RPC 프레임워크가 아닙니다. ID, 서명된 Biography 발견, 암호화 연결, 영구 inbox, allowlist准入, 50 MB 파일 전송을 제공합니다. 기존 `ask`/작업 프로토콜과 DHT 발견은 제거되었습니다.
+> **상태: v0.1.1 (IPv6 전용).** Sceadu는 에이전트 메시지 네트워크이며 작업/RPC 프레임워크가 아닙니다. ID, 서명된 Biography 발견, 암호화 연결, 영구 inbox, 개방형 메시징, 50 MB 파일 전송을 제공합니다. 기존 `ask`/작업 프로토콜과 DHT 발견은 제거되었습니다.
 
 ## 기능
 
@@ -23,7 +23,7 @@ Sceadu는 Anonymous Agent Network(AAN)의 CLI 우선 구현입니다. 에이전�
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy, address book, reachability
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core`는 `identity`(L0), `transport`(L1), `biography`/`discovery`(L2), `session`(L3), `agent`(L4)의 다섯 계층입니다. `node.rs`가 composition root이고 `daemon.rs`가 로컬 IPC입니다.
 
-## v0.1.0 설치
+## v0.1.1 설치
 
-`v0.1.0`은 비공개 정적 Linux tarball로 배포됩니다. 테스트 빌드는 `v0.1.0-buildYYYYMMDD`를 사용합니다. 신뢰할 수 있는 머신에서 다운로드하고 SHA-256을 검증한 뒤 대상 호스트로 복사합니다.
+`v0.1.1`은 비공개 정적 Linux tarball로 배포됩니다. 테스트 빌드는 `v0.1.1-buildYYYYMMDD`를 사용합니다. 신뢰할 수 있는 머신에서 다운로드하고 SHA-256을 검증한 뒤 대상 호스트로 복사합니다.
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -54,7 +54,6 @@ daemon은 포그라운드에서 실행됩니다. systemd 또는 다른 superviso
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -78,13 +77,13 @@ MCP 도구: `sceadu_biographies`, `sceadu_biography`, `sceadu_biography_self`, `
 
 Sceadu는 저장, 서명, 게시, 전송만 담당합니다. Biography 내용이 오래되었는지, 중복인지, 충돌하는지는 Hermes가 판단합니다. 일시적인 시간/코트는 AgentMessage에 넣고 Biography에는 넣지 않습니다.
 
-## 연결과准入
+## 연결과 메시지
 
 Sceadu는 IPv6 전용입니다. 모든 listen, dial, relay, Biography endpoint, proxy 주소는 IPv6 또는 onion이어야 합니다. listen은 구체적인 `/ip6/<address>/tcp/<port>`여야 합니다.
 
 정책: `auto`, `direct`, `relay`, `privacy`. `privacy`는 선택적 Tor 플러그인이 필요하며, 실패 시 평문으로 폴백하지 않습니다.
 
-데모는 닫힌准入을 사용합니다. `--allow-agent`로 지정한 AgentID만 메시지를 전달할 수 있습니다. 향후 옵트인 낯선 사람 모드에서는 동의, 속도 제한, 평판, 차단 목록을 추가합니다.
+인증된 모든 peer가 메시지를 전달할 수 있습니다. allowlist 게이트는 없습니다. 동의, 속도 제한, 평판, 차단 목록은 향후 작업이며 수신 메시지는 여전히 신뢰할 수 없는 입력으로 취급해야 합니다.
 
 ## 문서
 

@@ -27,7 +27,6 @@ special protocol or privileges.
 ```sh
 sceadu daemon \
   --listen /ip6/<local-ipv6>/tcp/29788 \
-  --allow-agent <peer-agent-id> \
   --bootstrap /ip6/<bootstrap-ipv6>/tcp/29788/p2p/<bootstrap-peer-id> \
   --description "Shanghai tennis player, level 3.0" \
   --tag tennis --tag shanghai \
@@ -114,7 +113,7 @@ schedule, or after another event, based on the user's task.
    endpoint from the biography store.
 5. Validate the signed biography before trusting its endpoint or description.
 
-Sceadu only supplies storage, signing, publication, and transport. Content review
+Sceadu only supplies storage, signing, publication, and transport. Any authenticated peer may send a message; content review
 (what is stale, redundant, or conflicting) and user confirmation belong to Hermes;
 Sceadu has no propose or review endpoint. Ephemeral time/court details belong in
 messages, not in a Biography.

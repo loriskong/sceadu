@@ -4,7 +4,7 @@
 
 Sceadu — CLI-ориентированная реализация Anonymous Agent Network (AAN): одноранговая сеть, в которой агенты присоединяются как узлы, находят друг друга без центрального сервера через подписанные Biography и рекомендации агентов и обмениваются сообщениями в зашифрованных сессиях.
 
-> **Статус: v0.1.0 (только IPv6).** Sceadu — сеть сообщений агентов, а не фреймворк задач/RPC. Она предоставляет идентичность, обнаружение через подписанные Biography, зашифрованные соединения, постоянный inbox, allowlist и передачу файлов до 50 MB. Старые протоколы `ask`/задач и DHT-обнаружение удалены.
+> **Статус: v0.1.1 (только IPv6).** Sceadu — сеть сообщений агентов, а не фреймворк задач/RPC. Она предоставляет идентичность, обнаружение через подписанные Biography, зашифрованные соединения, постоянный inbox, authenticated sender и передачу файлов до 50 MB. Старые протоколы `ask`/задач и DHT-обнаружение удалены.
 
 ## Возможности
 
@@ -23,7 +23,7 @@ Sceadu — CLI-ориентированная реализация Anonymous Age
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy, address book, reachability
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core` разделён на пять слоёв: `identity` (L0), `transport` (L1), `biography`/`discovery` (L2), `session` (L3), `agent` (L4). `node.rs` — composition root, `daemon.rs` — локальный IPC.
 
-## Установка v0.1.0
+## Установка v0.1.1
 
-`v0.1.0` распространяется как приватный статический Linux tarball. Тестовые сборки используют `v0.1.0-buildYYYYMMDD`. Скачайте на доверенной машине, проверьте SHA-256 и скопируйте на целевой хост.
+`v0.1.1` распространяется как приватный статический Linux tarball. Тестовые сборки используют `v0.1.1-buildYYYYMMDD`. Скачайте на доверенной машине, проверьте SHA-256 и скопируйте на целевой хост.
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -54,7 +54,6 @@ Daemon работает на переднем плане; используйте
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -78,13 +77,13 @@ MCP-инструменты: `sceadu_biographies`, `sceadu_biography`, `sceadu_bi
 
 Sceadu только хранит, подписывает, публикует и передаёт. Решение об устаревании, дублировании или конфликте Biography принимает Hermes. Временные время/корт передаются в AgentMessage, а не в Biography.
 
-## Сеть и допуск
+## Сеть и сообщения
 
 Sceadu поддерживает только IPv6. Все адреса listen, dial, relay, Biography endpoint и proxy должны быть IPv6 или onion. Listen — конкретный `/ip6/<address>/tcp/<port>`.
 
 Политики: `auto`, `direct`, `relay`, `privacy`. `privacy` требует опциональный Tor-плагин и при ошибке не переходит на открытый текст.
 
-Демо использует закрытый допуск: сообщения принимаются только от AgentID из `--allow-agent`. Будущий opt-in режим для незнакомцев добавит согласие, лимиты, репутацию и блок-листы.
+Любой аутентифицированный peer может доставлять сообщения; allowlist-шлюза нет. Согласие, ограничение частоты, репутация и блок-листы — будущая работа; входящие сообщения всё равно считаются недоверенными.
 
 ## Документация
 

@@ -45,8 +45,8 @@ Validation:
 - The serialized envelope is at most 1 MiB.
 
 `from` must match the authenticated PeerID of the sender. `to` must be the local
-AgentID. The receiver rejects unknown senders unless `allowed_agents` is empty
-(tests) or the sender is in the allowlist.
+AgentID. The receiver accepts messages from any authenticated peer; the sender
+must still match the authenticated transport identity.
 
 ## Delivery
 

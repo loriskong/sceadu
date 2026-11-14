@@ -6,7 +6,7 @@
 
 Sceadu هو تطبيق CLI-first لشبكة Anonymous Agent Network (AAN): شبكة ند-لند يدخل فيها الوكلاء كعقد، ويكتشفون بعضهم دون خادم مركزي عبر Biographies موقعة وتوصيات بين الوكلاء، ويتبادلون الرسائل في جلسات مشفرة من الطرف إلى الطرف.
 
-> **الحالة: v0.1.0 (IPv6 فقط).** Sceadu شبكة رسائل بين الوكلاء، وليس إطار مهام/RPC. يوفر الهوية، واكتشاف Biography الموقعة، واتصالاً مشفراً، وinbox دائم، وقبولاً عبر allowlist، ونقل ملفات حتى 50 MB. تمت إزالة بروتوكولي `ask`/المهام واكتشاف DHT القديمين.
+> **الحالة: v0.1.1 (IPv6 فقط).** Sceadu شبكة رسائل بين الوكلاء، وليس إطار مهام/RPC. يوفر الهوية، واكتشاف Biography الموقعة، واتصالاً مشفراً، وinbox دائم، وقبولاً عبر authenticated sender، ونقل ملفات حتى 50 MB. تمت إزالة بروتوكولي `ask`/المهام واكتشاف DHT القديمين.
 
 ## الميزات
 
@@ -25,7 +25,7 @@ Sceadu هو تطبيق CLI-first لشبكة Anonymous Agent Network (AAN): شب�
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy, address book, reachability
@@ -35,12 +35,12 @@ Sceadu daemon (Unix socket)
 
 ينقسم `sceadu-core` إلى خمس طبقات: `identity` (L0)، `transport` (L1)، `biography`/`discovery` (L2)، `session` (L3)، `agent` (L4). `node.rs` هو جذر التركيب، و`daemon.rs` خادم IPC المحلي.
 
-## تثبيت v0.1.0
+## تثبيت v0.1.1
 
-يُوزع `v0.1.0` كـ tarball Linux ثابت خاص. تستخدم إصدارات الاختبار `v0.1.0-buildYYYYMMDD`. نزّله على جهاز موثوق، وتحقق من SHA-256، ثم انسخه إلى المضيف الهدف.
+يُوزع `v0.1.1` كـ tarball Linux ثابت خاص. تستخدم إصدارات الاختبار `v0.1.1-buildYYYYMMDD`. نزّله على جهاز موثوق، وتحقق من SHA-256، ثم انسخه إلى المضيف الهدف.
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -56,7 +56,6 @@ sceadu --version
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -80,13 +79,13 @@ sceadu mcp
 
 Sceadu مسؤول فقط عن التخزين والتوقيع والنشر والنقل. Hermes يقرر ما إذا كانت Biography قديمة أو مكررة أو متعارضة. البيانات المؤقتة للوقت/الملعب تذهب في AgentMessage وليس في Biography.
 
-## الاتصال والقبول
+## الاتصال والرسائل
 
 Sceadu يدعم IPv6 فقط. جميع عناوين listen وdial وrelay وendpoint الخاص بـBiography والوكيل يجب أن تكون IPv6 أو onion. يجب أن يكون listen عنواناً ملموساً `/ip6/<address>/tcp/<port>`.
 
 السياسات: `auto`، `direct`، `relay`، `privacy`. يتطلب `privacy` إضافة Tor الاختيارية ولا يعود إلى النص الصريح عند الفشل.
 
-يستخدم العرض قبولاً مغلقاً: فقط AgentID المحدد في `--allow-agent` يمكنه تسليم الرسائل. وضع الغرباء الاختياري مستقبلاً سيضيف الموافقة وحدود المعدل والسمعة وقوائم الحظر.
+يمكن لأي peer موثّق تسليم الرسائل؛ لا توجد بوابة allowlist. الموافقة وحدود المعدل والسمعة وقوائم الحظر عمل مستقبلي؛ تبقى الرسائل الواردة غير موثوقة.
 
 ## الوثائق
 

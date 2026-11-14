@@ -77,9 +77,6 @@ enum Command {
         /// External onion endpoint to advertise.
         #[arg(long)]
         onion: Option<Multiaddr>,
-        /// AgentID allowed to deliver messages. Repeat.
-        #[arg(long = "allow-agent")]
-        allow_agents: Vec<AgentId>,
         /// Bootstrap peer multiaddr. Repeat; overrides SCEADU_BOOTSTRAP/default.
         #[arg(long = "bootstrap")]
         bootstrap: Vec<Multiaddr>,
@@ -231,7 +228,6 @@ async fn main() -> Result<()> {
             relay_server,
             tor_proxy,
             onion,
-            allow_agents,
             bootstrap,
             description,
             tags,
@@ -241,9 +237,6 @@ async fn main() -> Result<()> {
         } => {
             let identity = load_identity(&cli.path, &cli.passphrase_file)?;
             ensure_ipv6_listen_addr(&listen)?;
-            if allow_agents.is_empty() {
-                bail!("at least one --allow-agent is required for the closed demo admission mode");
-            }
             let inbox_path = inbox.unwrap_or(default_inbox_path()?);
             let file_store_path = inbox_path
                 .parent()
@@ -266,7 +259,6 @@ async fn main() -> Result<()> {
                     tags,
                     ..Default::default()
                 },
-                allowed_agents: allow_agents,
                 inbox_path: Some(inbox_path.clone()),
                 file_store_path: Some(file_store_path),
                 biography_store_path: biography_store.or_else(|| {

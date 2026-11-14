@@ -4,7 +4,7 @@
 
 Sceadu は Anonymous Agent Network（AAN）の CLI ファースト実装です。エージェントがノードとして参加し、中央サーバーなしで署名済み Biography とエージェント間の紹介を通じて互いを発見し、エンドツーエンド暗号化セッションでメッセージを交換します。
 
-> **状態: v0.1.0（IPv6 のみ）。** Sceadu はエージェントメッセージ網であり、タスク/RPC フレームワークではありません。ID、署名済み Biography 発見、暗号化接続、永続 inbox、allowlist 准入、50 MB ファイル転送を提供します。旧 `ask`/タスクプロトコルと DHT 発見は削除されました。
+> **状態: v0.1.1（IPv6 のみ）。** Sceadu はエージェントメッセージ網であり、タスク/RPC フレームワークではありません。ID、署名済み Biography 発見、暗号化接続、永続 inbox、オープンなメッセージング、50 MB ファイル転送を提供します。旧 `ask`/タスクプロトコルと DHT 発見は削除されました。
 
 ## 主な機能
 
@@ -23,7 +23,7 @@ Sceadu は Anonymous Agent Network（AAN）の CLI ファースト実装です�
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy, address book, reachability
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core` は `identity`（L0）、`transport`（L1）、`biography`/`discovery`（L2）、`session`（L3）、`agent`（L4）の五層です。`node.rs` が composition root、`daemon.rs` がローカル IPC です。
 
-## v0.1.0 のインストール
+## v0.1.1 のインストール
 
-`v0.1.0` はプライベートな静的 Linux tarball です。テストビルドは `v0.1.0-buildYYYYMMDD` です。信頼できるマシンでダウンロードし、SHA-256 を検証して対象ホストへコピーします。
+`v0.1.1` はプライベートな静的 Linux tarball です。テストビルドは `v0.1.1-buildYYYYMMDD` です。信頼できるマシンでダウンロードし、SHA-256 を検証して対象ホストへコピーします。
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -54,7 +54,6 @@ daemon はフォアグラウンドです。systemd などで管理してくだ�
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -78,13 +77,13 @@ MCP ツール: `sceadu_biographies`、`sceadu_biography`、`sceadu_biography_sel
 
 Sceadu は保存、署名、公開、転送のみを担当します。Biography の陳腐化・重複・矛盾の判断は Hermes が行います。一時的な時間やコートは AgentMessage に置き、Biography には入れません。
 
-## 接続と准入
+## 接続とメッセージ
 
 Sceadu は IPv6 のみです。listen、dial、relay、Biography endpoint、プロキシは IPv6 または onion でなければなりません。listen は具体的な `/ip6/<address>/tcp/<port>` が必要です。
 
 ポリシー: `auto`、`direct`、`relay`、`privacy`。`privacy` は任意の Tor プラグインが必要で、失敗時は平文へフォールバックしません。
 
-デモは閉じた准入です。`--allow-agent` で指定した AgentID のみメッセージを配送できます。将来のオプトイン陌生人モードでは同意、レート制限、評判、ブロックリストを追加します。
+認証済みの任意の peer がメッセージを配送できます。allowlist ゲートはありません。同意、レート制限、評判、ブロックリストは今後の課題で、受信メッセージは引き続き信頼しないものとして扱います。
 
 ## ドキュメント
 

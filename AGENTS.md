@@ -35,7 +35,7 @@ Current stage: pre-alpha (IPv6-only) Agent message network. The task/RPC protoco
 - A signed `Biography` is the discovery record: protocol, AgentID, public key, endpoints, description, tags, updated_at, signature. Nodes publish it at startup and every five minutes, and store verified biographies locally.
 - Bootstrap peers are ordinary nodes listed in configuration (`--bootstrap`, `SCEADU_BOOTSTRAP`, or `DEFAULT_BOOTSTRAP`). They have no special code path or privileges.
 - The daemon is foreground and owns the node and SQLite inbox. CLI/MCP clients use a Unix socket. There is no sender outbox; a send to an offline peer fails.
-- Demo admission is closed: `--allow-agent` is required. A future opt-in stranger mode will add discovery-driven contact, consent, rate limiting, reputation, and blocklists; do not implement it silently.
+- Messaging is open: any authenticated peer may deliver a message. There is no allowlist gate. Abuse controls (consent, rate limiting, reputation, blocklists) remain future work; treat all inbound messages as untrusted.
 - File transfer is a separate chunked, SHA-256-verified, resumable stream with a 50 MiB limit. Files are not base64-encoded into messages.
 - UPnP/NAT-PMP/PCP port mapping, AutoNAT, and DCUtR are removed. Circuit relay v2 is retained for firewall-restricted or non-inbound peers.
 - Out of MVP: mobile apps, mixnet, offline messaging, groups, payments, GUI, key recovery.
@@ -63,9 +63,9 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Release convention
 
-- Cargo version: `0.1.0`.
-- Tag format: `vMAJOR.MINOR.PATCH` for releases (current: `v0.1.0`), and `v0.1.0-buildYYYYMMDD` for test builds; at most one build tag per date.
-- `v0.1.0` is the first tagged release. Test builds are private pre-releases. Assets are downloaded on a trusted machine and copied to hosts with `scp`.
+- Cargo version: `0.1.1`.
+- Tag format: `vMAJOR.MINOR.PATCH` for releases (current: `v0.1.1`), and `v0.1.0-buildYYYYMMDD` for test builds; at most one build tag per date.
+- `v0.1.1` is the current tagged release; `v0.1.0` remains available. Test builds are private pre-releases. Assets are downloaded on a trusted machine and copied to hosts with `scp`.
 - Assets are static `x86_64-unknown-linux-musl` tarballs with `sceadu`, `install.sh`, `SKILL.md`, all README translations, `AGENTS.md`, and SHA-256. Target hosts do not need Rust.
 - See `docs/release.md`.
 
@@ -104,4 +104,4 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 
 ## Current milestone
 
-M1 and M2 are complete; M3 was replaced by the Agent message network. M4a/M4b connectivity is IPv6-only; port mapping, AutoNAT, DCUtR, and DHT discovery are removed. Circuit relay v2 and the optional Tor plugin remain. The foreground daemon, SQLite inbox, signed Biography store and bootstrap refresh, allowlist admission, A2A-inspired messages, 50 MiB file stream, and local MCP stdio adapter are implemented. A public bootstrap VPS is deployment configuration, not a protocol role; QUIC and stranger-mode consent remain future work. Remaining hardening: single-use invites, persistent reputation, stranger-mode consent/rate limits, and larger eclipse simulations.
+M1 and M2 are complete; M3 was replaced by the Agent message network. M4a/M4b connectivity is IPv6-only; port mapping, AutoNAT, DCUtR, and DHT discovery are removed. Circuit relay v2 and the optional Tor plugin remain. The foreground daemon, SQLite inbox, signed Biography store and bootstrap refresh, open authenticated messaging, A2A-inspired messages, 50 MiB file stream, and local MCP stdio adapter are implemented. A public bootstrap VPS is deployment configuration, not a protocol role; QUIC and stranger-mode consent remain future work. Remaining hardening: single-use invites, persistent reputation, stranger-mode consent/rate limits, and larger eclipse simulations.

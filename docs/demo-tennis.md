@@ -2,7 +2,7 @@
 
 This runbook wires four hosts into one Sceadu Agent message network. It is a
 closed-admission demo: every daemon only accepts AgentIDs that were explicitly
-allowlisted.
+open to any authenticated peer.
 
 ```text
 A  local Hermes + Sceadu daemon       user
@@ -25,7 +25,7 @@ a proposal is good, or when the task is complete. The Hermes agents decide.
 - A Feishu app for D with the bot enabled and the required event permissions.
 - B needs no Hermes profile; it only runs a Sceadu relay/observer daemon.
 
-## 2. Identities and allowlist
+## 2. Identities
 
 On each host:
 
@@ -40,8 +40,6 @@ example A accepts C and D:
 ```sh
 sceadu daemon \
   --listen /ip6/<A-global-ipv6>/tcp/29788 \
-  --allow-agent <C-agent-id> \
-  --allow-agent <D-agent-id> \
   --inbox ~/.sceadu/inbox.sqlite
 ```
 
@@ -54,9 +52,6 @@ B as relay server:
 sceadu daemon \
   --listen /ip6/<B-global-ipv6>/tcp/29788 \
   --relay-server \
-  --allow-agent <A-agent-id> \
-  --allow-agent <C-agent-id> \
-  --allow-agent <D-agent-id> \
   --inbox ~/.sceadu/inbox.sqlite
 ```
 
@@ -66,7 +61,6 @@ If D has no inbound IPv6, run D as a relay client:
 sceadu daemon \
   --connectivity relay \
   --relay /ip6/<B-ipv6>/tcp/29788/p2p/<B-peer-id> \
-  --allow-agent <A-agent-id> \
   --inbox ~/.sceadu/inbox.sqlite
 ```
 
@@ -81,7 +75,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=%i
-ExecStart=%h/.local/bin/sceadu daemon --listen /ip6/<address>/tcp/29788 --allow-agent <peer-agent-id> --inbox %h/.sceadu/inbox.sqlite
+ExecStart=%h/.local/bin/sceadu daemon --listen /ip6/<address>/tcp/29788 --inbox %h/.sceadu/inbox.sqlite
 Restart=on-failure
 RestartSec=3
 

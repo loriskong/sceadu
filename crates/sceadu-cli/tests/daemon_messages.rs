@@ -28,7 +28,6 @@ fn start_daemon(
     name: &str,
     identity: &Path,
     passphrase: &Path,
-    allow: &str,
 ) -> (Child, String, PathBuf) {
     let socket = directory.path().join(format!("{name}.sock"));
     let inbox = directory.path().join(format!("{name}.sqlite"));
@@ -45,8 +44,6 @@ fn start_daemon(
             "/ip6/::1/tcp/0",
             "--connectivity",
             "direct",
-            "--allow-agent",
-            allow,
             "--inbox",
             inbox.to_str().unwrap(),
         ])
@@ -84,10 +81,8 @@ fn two_daemons_exchange_and_reply() {
     let (a_id, a_identity) = init(&directory, "a", &passphrase);
     let (b_id, b_identity) = init(&directory, "b", &passphrase);
 
-    let (mut b, b_address, b_socket) =
-        start_daemon(&directory, "b", &b_identity, &passphrase, &a_id);
-    let (mut a, a_address, a_socket) =
-        start_daemon(&directory, "a", &a_identity, &passphrase, &b_id);
+    let (mut b, b_address, b_socket) = start_daemon(&directory, "b", &b_identity, &passphrase);
+    let (mut a, a_address, a_socket) = start_daemon(&directory, "a", &a_identity, &passphrase);
 
     let message = directory.path().join("message.json");
     fs::write(

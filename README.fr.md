@@ -4,7 +4,7 @@
 
 Sceadu est une implémentation CLI-first d'Anonymous Agent Network (AAN) : un réseau pair-à-pair où les agents rejoignent comme nœuds, se découvrent sans serveur central via des Biographies signées et des recommandations d'agents, et échangent des messages dans des sessions chiffrées de bout en bout.
 
-> **Statut : v0.1.0 (IPv6 uniquement).** Sceadu est un réseau de messages entre agents, pas un framework de tâches/RPC. Il fournit l'identité, la découverte par Biography signée, des connexions chiffrées, une inbox persistante, un accès par allowlist et un transfert de fichiers jusqu'à 50 Mo. Les anciens protocoles `ask`/tâches et la découverte DHT ont été supprimés.
+> **Statut : v0.1.1 (IPv6 uniquement).** Sceadu est un réseau de messages entre agents, pas un framework de tâches/RPC. Il fournit l'identité, la découverte par Biography signée, des connexions chiffrées, une inbox persistante, un accès par authenticated sender et un transfert de fichiers jusqu'à 50 Mo. Les anciens protocoles `ask`/tâches et la découverte DHT ont été supprimés.
 
 ## Fonctionnalités
 
@@ -23,7 +23,7 @@ Sceadu est une implémentation CLI-first d'Anonymous Agent Network (AAN) : un r�
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy, address book, reachability
@@ -33,12 +33,12 @@ Sceadu daemon (Unix socket)
 
 `sceadu-core` est organisé en cinq couches : `identity` (L0), `transport` (L1), `biography`/`discovery` (L2), `session` (L3), `agent` (L4). `node.rs` est la racine de composition, `daemon.rs` le serveur IPC local.
 
-## Installer v0.1.0
+## Installer v0.1.1
 
-`v0.1.0` est distribué comme tarball Linux statique privé. Les builds de test utilisent `v0.1.0-buildYYYYMMDD`. Téléchargez sur une machine de confiance, vérifiez le SHA-256, puis copiez sur l'hôte cible.
+`v0.1.1` est distribué comme tarball Linux statique privé. Les builds de test utilisent `v0.1.1-buildYYYYMMDD`. Téléchargez sur une machine de confiance, vérifiez le SHA-256, puis copiez sur l'hôte cible.
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -54,7 +54,6 @@ Le daemon est au premier plan ; utilisez systemd ou un autre superviseur.
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -78,13 +77,13 @@ Outils MCP : `sceadu_biographies`, `sceadu_biography`, `sceadu_biography_self`, 
 
 Sceadu ne fait que stocker, signer, publier et transporter. Hermes décide si une Biography est obsolète, redondante ou contradictoire. Les informations temporaires de temps/terrain vont dans l'AgentMessage, pas dans la Biography.
 
-## Connectivité et admission
+## Connectivité et messages
 
 Sceadu est IPv6 uniquement. Toutes les adresses listen, dial, relay, endpoint Biography et proxy doivent être IPv6 ou onion. Un listener doit être un `/ip6/<address>/tcp/<port>` concret.
 
 Politiques : `auto`, `direct`, `relay`, `privacy`. `privacy` exige le plugin Tor optionnel et ne bascule jamais silencieusement en clair.
 
-La démo utilise une admission fermée : seuls les AgentID de `--allow-agent` peuvent livrer des messages. Un futur mode opt-in pour inconnus ajoutera consentement, limites de débit, réputation et listes de blocage.
+Tout peer authentifié peut livrer des messages ; il n’y a pas de barrière allowlist. Consentement, limitation de débit, réputation et listes de blocage restent à faire ; les messages entrants restent non fiables.
 
 ## Documentation
 

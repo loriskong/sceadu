@@ -152,7 +152,6 @@ fn daemon_status_reports_tcp_transport() {
     let directory = TempDir::new().unwrap();
     let init = run_json(&directory, "correct horse battery staple", &["init"]);
     assert!(init.status.success());
-    let agent_id = parse_json(&init)["agent_id"].as_str().unwrap().to_owned();
     let passphrase_file =
         write_passphrase(&directory, "passphrase.txt", "correct horse battery staple");
     let identity_path = directory.path().join("identity.json");
@@ -171,8 +170,6 @@ fn daemon_status_reports_tcp_transport() {
             "/ip6/::1/tcp/0",
             "--connectivity",
             "direct",
-            "--allow-agent",
-            &agent_id,
             "--inbox",
             inbox.to_str().unwrap(),
         ])
@@ -216,7 +213,6 @@ fn daemon_rejects_ipv4_and_unspecified_listen() {
     let directory = TempDir::new().unwrap();
     let init = run_json(&directory, "correct horse battery staple", &["init"]);
     assert!(init.status.success());
-    let agent_id = parse_json(&init)["agent_id"].as_str().unwrap().to_owned();
     let passphrase_file =
         write_passphrase(&directory, "passphrase.txt", "correct horse battery staple");
     let identity_path = directory.path().join("identity.json");
@@ -233,8 +229,6 @@ fn daemon_rejects_ipv4_and_unspecified_listen() {
                 "daemon",
                 "--listen",
                 listen,
-                "--allow-agent",
-                &agent_id,
                 "--inbox",
                 directory.path().join("bad.sqlite").to_str().unwrap(),
             ])

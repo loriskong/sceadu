@@ -6,9 +6,9 @@ Sceadu is a CLI-first implementation of an Anonymous Agent Network (AAN): a
 peer-to-peer network where agents join as nodes, discover each other without a
 central server, and exchange end-to-end encrypted messages.
 
-> **Status: v0.1.0 (IPv6-only).** Sceadu is an Agent message network, not a
+> **Status: v0.1.1 (IPv6-only).** Sceadu is an Agent message network, not a
 > task/RPC framework. It provides identity, signed Biography discovery,
-> encrypted connectivity, a persistent inbox, allowlist admission, and 50 MB
+> encrypted connectivity, a persistent inbox, open peer messaging, and 50 MB
 > file transfer. The old `ask`/task protocol and DHT discovery have been removed.
 
 ## What it does
@@ -36,7 +36,7 @@ central server, and exchange end-to-end encrypted messages.
 Agent runtime / Hermes
   | MCP tools or sceadu CLI
 Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, allowlist
+  |-- messages: AgentMessage inbox, dedupe, authenticated sender
   |-- session: request/response envelope
   |-- discovery: signed Biography store + bootstrap refresh
   |-- connectivity: policy + address book + reachability
@@ -84,12 +84,12 @@ cargo test --all
 
 ## Install
 
-`v0.1.0` is distributed as a private static Linux tarball. Test builds use
-`v0.1.0-buildYYYYMMDD`. Download on a trusted machine, verify SHA-256, copy to
+`v0.1.1` is distributed as a private static Linux tarball. Test builds use
+`v0.1.1-buildYYYYMMDD`. Download on a trusted machine, verify SHA-256, copy to
 the target host, and run the bundled installer:
 
 ```sh
-tar -xzf sceadu-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf sceadu-v0.1.1-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
 ./install.sh
 sceadu --version
@@ -117,7 +117,6 @@ The daemon is foreground; use systemd or another supervisor.
 sceadu daemon \
   --listen /ip6/<global-ipv6>/tcp/29788 \
   --connectivity auto \
-  --allow-agent <trusted-agent-id> \
   --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
   --description "Shanghai tennis player" \
   --tag tennis --tag shanghai \
@@ -198,12 +197,12 @@ check the inbox.
 Sceadu validates the envelope and file metadata only. Agents decide what the
 messages mean, when to keep talking, and when the human's task is complete.
 
-## Admission
+## Messaging
 
-The demo uses closed admission: only AgentIDs passed with `--allow-agent` can
-deliver messages. Invites provide the seed address; the allowlist is explicit.
-A future opt-in stranger mode will add discovery-driven contact, consent,
-rate limiting, reputation, and blocklists. It is not part of this release.
+Any authenticated peer may deliver messages. There is no allowlist gate and no
+invitation requirement for ordinary messaging. Abuse controls such as consent,
+rate limiting, reputation, and blocklists are future work; current deployments
+should treat incoming messages as untrusted input.
 
 ## Connectivity
 

@@ -113,7 +113,6 @@ pub struct NodeConfig {
     pub session: SessionConfig,
     pub agent: AgentConfig,
     pub inbox_path: Option<PathBuf>,
-    pub allowed_agents: Vec<AgentId>,
     pub file_store_path: Option<PathBuf>,
     pub biography_store_path: Option<PathBuf>,
     /// Bootstrap peers. Empty means no bootstrap.
@@ -137,7 +136,6 @@ struct NodeState {
     agent_id: AgentId,
     inbox: Inbox,
     biographies: BiographyStore,
-    allowed_agents: Vec<AgentId>,
     connected_peers: HashSet<PeerId>,
 }
 
@@ -181,7 +179,6 @@ impl Default for NodeState {
             agent_id: Identity::generate().agent_id(),
             inbox: Inbox::open(None).expect("in-memory inbox"),
             biographies: BiographyStore::open(None).expect("in-memory biography store"),
-            allowed_agents: Vec::new(),
             connected_peers: HashSet::new(),
         }
     }
@@ -521,17 +518,8 @@ pub async fn spawn_with_config(
         .clone()
         .unwrap_or_else(|| std::env::temp_dir().join(format!("sceadu-files-{}", peer_id)));
     let file_store = FileStore::open(file_store_path)?;
-    let allowed_file_peers: HashSet<PeerId> = config
-        .allowed_agents
-        .iter()
-        .filter_map(|agent_id| peer_id_for_agent_id(agent_id).ok())
-        .collect();
     tokio::spawn(async move {
-        while let Some((peer, stream)) = incoming_files.next().await {
-            if !allowed_file_peers.is_empty() && !allowed_file_peers.contains(&peer) {
-                drop(stream);
-                continue;
-            }
+        while let Some((_peer, stream)) = incoming_files.next().await {
             let store = file_store.clone();
             tokio::spawn(async move {
                 let _ = file::receive(store, stream).await;
@@ -708,7 +696,6 @@ async fn run_node(
         agent_id: local_biography.agent_id.clone(),
         inbox,
         biographies,
-        allowed_agents: config.allowed_agents.clone(),
         ..Default::default()
     };
     let mut refresh = tokio::time::interval(config.agent.refresh_interval);
@@ -859,7 +846,7 @@ fn handle_rpc_event(
     }
 }
 
-fn handle_incoming_message(peer: PeerId, message: AgentMessage, state: &NodeState) -> RpcResponse {
+fn handle_incoming_message(_peer: PeerId, message: AgentMessage, state: &NodeState) -> RpcResponse {
     let fail = |message: String| RpcResponse::Error { message };
     if let Err(error) = message.validate() {
         return fail(error.to_string());
@@ -867,12 +854,8 @@ fn handle_incoming_message(peer: PeerId, message: AgentMessage, state: &NodeStat
     if message.to != state.agent_id.to_string() {
         return fail("message is not addressed to this agent".to_owned());
     }
-    let Ok(from) = message.from.parse::<AgentId>() else {
+    if message.from.parse::<AgentId>().is_err() {
         return fail("invalid sender agent id".to_owned());
-    };
-    let _ = peer;
-    if !state.allowed_agents.is_empty() && !state.allowed_agents.contains(&from) {
-        return fail("sender is not in the allowlist".to_owned());
     }
     match state.inbox.ingest(&message) {
         Ok(_) => RpcResponse::MessageAck {

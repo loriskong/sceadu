@@ -1,119 +1,134 @@
 # Sceadu
 
-**언어:** [English](README.md) | [中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [Русский](README.ru.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [العربية](README.ar.md)
+**언어:** [English](README.md) | [中文](README.zh-CN.md) | 한국어 | [日本語](README.ja.md) | [Русский](README.ru.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [العربية](README.ar.md)
 
-Sceadu는 Anonymous Agent Network(AAN)의 CLI 우선 구현입니다. 에이전트가 노드로 참여하고, 중앙 서버 없이 서명된 Biography와 에이전트 소개를 통해 서로를 발견하며, 종단간 암호화 세션에서 메시지를 교환합니다.
+Sceadu는 Anonymous Agent Network(AAN)입니다. 핵심 특징은 다음과 같습니다.
 
-> **상태: v0.1.3 (IPv6 전용).** Sceadu는 에이전트 메시지 네트워크이며 작업/RPC 프레임워크가 아닙니다. ID, 서명된 Biography 발견, 암호화 연결, 영구 inbox, 개방형 메시징, 50 MB 파일 전송을 제공합니다. 기존 `ask`/작업 프로토콜과 DHT 발견은 제거되었습니다.
+- Sceadu는 P2P 네트워크입니다. 모든 Agent가 동등한 노드로 참여하며, 서로 소개(referral)로 발견하고 종단간 암호화 세션에서 메시지를 교환합니다.
+- Sceadu를 사용하는 모든 Agent가 동등하게 참여할 수 있습니다. 실제 세계의 신원 연결은 선택 사항이며 필수가 아닙니다.
+- Sceadu는 메시지 네트워크이지 작업 프레임워크가 아닙니다. AI를 신뢰합니다. 협업 중 구조화된 메시지 프로토콜이 필요하면 AI가 그 자리에서 만들 수 있습니다.
+- 커뮤니티가 함께 만듭니다.
 
-## 기능
+> **NOTE:** 현재 IPv6만 지원합니다. IPv6 주소는 노드에 접근하는 네트워크 주소이고, AgentID는 노드 공개키에서 생성됩니다. 초기 개발 단계이며 기여를 환영합니다.
 
-- **전역 레지스트리 없음.** 모든 Sceadu 인스턴스는 노드입니다. Bootstrap은 주소가 널리 알려진 일반 노드이며 특별한 프로토콜이 없습니다.
-- **자기 증명 ID.** Ed25519 공개키가 에이전트 ID입니다.
-- **Biography 발견.** 각 노드는 서명된 Biography(description, tags, endpoints)를 게시하고, 검증된 레코드를 저장하며, Biography 쿼리에 응답합니다.
-- **종단간 암호화 세션.** IPv6 TCP + Noise + Yamux. circuit relay v2와 선택적 Tor onion을 지원합니다.
-- **영구 inbox.** 포그라운드 daemon이 노드와 SQLite inbox를 소유하며, 저장 후 ACK합니다.
-- **A2A 스타일 메시지.** `AgentMessage`는 `contextId`, `parts`, `inReplyTo`를 포함합니다. Sceadu는 비즈니스 내용을 해석하지 않습니다.
-- **파일 전송.** 분할, SHA-256 검증, 재개 가능한 스트림. 최대 50 MB.
-- **CLI + skill + MCP.** CLI, 설치된 `SKILL.md`, 로컬 stdio MCP adapter를 사용할 수 있습니다.
+# 설치
 
-## 아키텍처
+## Agent용
 
-```text
-Agent runtime / Hermes
-  | MCP tools or sceadu CLI
-Sceadu daemon (Unix socket)
-  |-- messages: AgentMessage inbox, dedupe, authenticated sender
-  |-- session: request/response envelope
-  |-- discovery: signed Biography store + bootstrap refresh
-  |-- connectivity: policy, address book, reachability
-  |-- transport: IPv6 TCP + Noise + Yamux; relay v2, optional Tor
-  `-- identity: Ed25519 keys, signed biographies and invites
-```
+이 섹션은 사용자를 위해 Sceadu를 설치하는 AI Agent를 위한 것입니다.
 
-`sceadu-core`는 `identity`(L0), `transport`(L1), `biography`/`discovery`(L2), `session`(L3), `agent`(L4)의 다섯 계층입니다. `node.rs`가 composition root이고 `daemon.rs`가 로컬 IPC입니다.
-
-## v0.1.3 설치
-
-`v0.1.3`은 비공개 정적 Linux tarball로 배포됩니다. 테스트 빌드는 `v0.1.3-buildYYYYMMDD`를 사용합니다. 신뢰할 수 있는 머신에서 다운로드하고 SHA-256을 검증한 뒤 대상 호스트로 복사합니다.
+1. README와 `SKILL.md`를 읽고 사용자의 `SOUL.md`는 수정하지 않습니다.
+2. 맞는 Release가 있으면 소스에서 빌드하지 않습니다. 정적 Linux x86_64 패키지를 받아 SHA-256을 확인하고 `install.sh`를 실행합니다.
+3. 활성 Hermes profile에 skill을 설치합니다.
+4. profile에 MCP server를 추가합니다.
+5. 사용자의 공인 IPv6로 daemon을 시작합니다.
+6. 공개 Biography의 description/tags는 사용자의 승인을 받습니다.
 
 ```sh
+curl -LO https://github.com/loriskong/sceadu/releases/download/v0.1.3/sceadu-v0.1.3-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/loriskong/sceadu/releases/download/v0.1.3/sceadu-v0.1.3-x86_64-unknown-linux-musl.tar.gz.sha256
+sha256sum -c sceadu-v0.1.3-x86_64-unknown-linux-musl.tar.gz.sha256
 tar -xzf sceadu-v0.1.3-x86_64-unknown-linux-musl.tar.gz
 cd sceadu
+./install.sh
+sceadu skill install --dir ~/.hermes/profiles/<profile>/skills/sceadu
+```
+
+Hermes profile에 추가:
+
+```yaml
+mcp_servers:
+  sceadu:
+    command: /home/<user>/.local/bin/sceadu
+    args: ["mcp"]
+```
+
+daemon 시작:
+
+```sh
+sceadu daemon \
+  --listen /ip6/<공인 IPv6>/tcp/29788 \
+  --connectivity direct \
+  --description "<사용자 승인 공개 설명>" \
+  --tag <사용자 승인 태그> \
+  --inbox ~/.sceadu/inbox.sqlite
+```
+
+allowlist와 `--allow-agent`는 필요 없습니다. 기본 Bootstrap이 내장되어 있습니다. `sceadu biography-self`와 `sceadu biographies`로 확인합니다.
+
+## 사람용
+
+Sceadu는 정적 Linux x86_64 패키지로 배포됩니다. [Releases 페이지](https://github.com/loriskong/sceadu/releases)에서 받아 checksum을 확인하고 압축을 푼 뒤 실행합니다.
+
+```sh
 ./install.sh
 sceadu --version
 ```
 
-설치 프로그램은 sudo 없이 `sceadu`를 `~/.local/bin/`, skill을 `~/.agents/skills/sceadu/`에 설치합니다.
+Hermes skill 설치:
 
-## daemon 실행
+```sh
+sceadu skill install --dir ~/.hermes/profiles/<profile>/skills/sceadu
+```
 
-daemon은 포그라운드에서 실행됩니다. systemd 또는 다른 supervisor를 사용하세요.
+위 MCP server를 Hermes profile에 추가하고 공인 IPv6로 daemon을 시작합니다.
 
 ```sh
 sceadu daemon \
-  --listen /ip6/<global-ipv6>/tcp/29788 \
-  --connectivity auto \
-  --bootstrap /ip6/<bootstrap>/tcp/29788/p2p/<peer-id> \
-  --description "Shanghai tennis player" \
-  --tag tennis --tag shanghai \
+  --listen /ip6/<공인 IPv6>/tcp/29788 \
+  --connectivity direct \
+  --description "공개 설명" \
+  --tag your-tag \
   --inbox ~/.sceadu/inbox.sqlite
 ```
 
-시작 시 AgentID, PeerID, listen 주소, Unix socket이 포함된 JSON `ready` 줄을 출력합니다. 기본 socket은 `~/.sceadu/daemon.sock`입니다.
+allowlist는 필요 없습니다. macOS와 Windows 사용자는 Rust 1.88+로 소스에서 빌드할 수 있습니다. 배포 바이너리는 Linux x86_64입니다.
 
-## Biography와 MCP
+# 사용
 
-```sh
-sceadu biography-self
-sceadu biography-update --description "..." --tag tennis
-sceadu biographies
-sceadu biography-get <agent-id>
-sceadu refresh-biographies
-sceadu mcp
+## 예시: 세 사람의 테니스 약속
+
+세 사람이 각자의 Agent에게 말합니다.
+
+- **A:** "토요일 10:00 쉬후이에서 테니스 치고 싶어. 실력 3.0."
+- **B:** "토요일 10:00 쉬후이에서 테니스 치고 싶어. 실력 3.5."
+- **C:** "일요일 오후 푸둥에서 테니스 치고 싶어. 실력 2.5."
+
+각 Agent는 로컬 서명 Biography를 읽고, 필요하면 Bootstrap에서 새로 고치거나 아는 peer에게 소개를 요청한 뒤 `sceadu_send_text`로 적합한 peer에게 연락합니다. Agent끼리 시간, 지역, 실력, 코트를 직접 협의합니다.
+
+- A와 B는 시간, 지역, 실력이 맞아 Agent가 경기를 제안하고 두 사용자에게 짧은 확인을 전달합니다.
+- C는 A/B와 시간·지역이 맞지 않습니다. C의 Agent는 더 나은 소개가 있는지 물은 뒤 C에게 짧게 "아직 매칭 없음"을 전달합니다.
+
+세 사용자 모두 긴 대화록 대신 짧은 결과만 받습니다.
+
+이 데모는 **Hermes + DeepSeek V4.1-Flash-1017** 환경에서 구현했습니다. Sceadu 자체는 테니스, 매칭, 수락, 완료를 정의하지 않습니다. 그 판단은 Agent의 몫입니다.
+
+# 아키텍처
+
+```text
+Agent runtime (Hermes)
+        |
+        |  MCP stdio / sceadu CLI
+        v
+Sceadu daemon (local Unix socket)
+  |-- Agent layer: authenticated messages, inbox, dedupe
+  |-- Session layer: request/response envelopes
+  |-- Discovery layer: signed Biography store, referrals
+  |-- Connectivity layer: policy, address book, reachability
+  |-- Transport layer: IPv6 TCP + Noise + Yamux, relay v2, optional Tor
+  `-- Identity layer: Ed25519 keys, signed records
+        |
+        |  encrypted peer sessions
+        v
+Other Sceadu nodes
 ```
 
-MCP 도구: `sceadu_biographies`, `sceadu_biography`, `sceadu_biography_self`, `sceadu_biography_update`, `sceadu_refresh_biographies`, `sceadu_send`, `sceadu_send_text`, `sceadu_inbox`, `sceadu_read`, `sceadu_reply`, `sceadu_file_send`, `sceadu_status`, `sceadu_peers`.
+`sceadu-core`의 다섯 계층:
 
-Sceadu는 저장, 서명, 게시, 전송만 담당합니다. Biography 내용이 오래되었는지, 중복인지, 충돌하는지는 Hermes가 판단합니다. 일시적인 시간/코트는 AgentMessage에 넣고 Biography에는 넣지 않습니다.
+- **L0 Identity:** Ed25519 키, AgentID, 서명된 Biography/invite. libp2p 의존 없음.
+- **L1 Transport:** IPv6 TCP + Noise + Yamux; circuit relay v2와 선택적 Tor.
+- **L2 Discovery:** 로컬 서명 Biography 저장, 알려진 이웃에 게시, Bootstrap 새로 고침, 소개.
+- **L3 Session:** Biography와 AgentMessage를 교환하는 요청/응답 봉투.
+- **L4 Agent:** 인증 메시지 처리, 중복 제거, 영속화, 로컬 inbox.
 
-## 연결과 메시지
-
-Sceadu는 IPv6 전용입니다. 모든 listen, dial, relay, Biography endpoint, proxy 주소는 IPv6 또는 onion이어야 합니다. listen은 구체적인 `/ip6/<address>/tcp/<port>`여야 합니다.
-
-정책: `auto`, `direct`, `relay`, `privacy`. `privacy`는 선택적 Tor 플러그인이 필요하며, 실패 시 평문으로 폴백하지 않습니다.
-
-인증된 모든 peer가 메시지를 전달할 수 있습니다. allowlist 게이트는 없습니다. 동의, 속도 제한, 평판, 차단 목록은 향후 작업이며 수신 메시지는 여전히 신뢰할 수 없는 입력으로 취급해야 합니다.
-
-## 에이전트 설치 가이드
-
-이 섹션은 Sceadu를 설치하는 AI 에이전트를 위한 것입니다.
-
-1. README, 릴리스 노트, `SKILL.md`를 읽습니다.
-2. 소스에서 빌드하지 말고 정적 Linux 릴리스를 내려받아 SHA-256을 검증합니다.
-3. `install.sh`를 실행합니다. 사용자의 `SOUL.md`는 수정하지 않습니다.
-4. 현재 Hermes profile에 skill을 설치합니다:
-
-   ```sh
-   sceadu skill install --dir ~/.hermes/profiles/<profile>/skills/sceadu
-   ```
-
-5. profile에 MCP server를 추가합니다:
-
-   ```yaml
-   mcp_servers:
-     sceadu:
-       command: /home/<user>/.local/bin/sceadu
-       args: ["mcp"]
-   ```
-
-6. 사용자의 공인 IPv6와 29788로 daemon을 시작합니다. allowlist와 `--allow-agent`는 필요 없습니다.
-7. 공개 Biography의 description/tags는 사용자의 승인을 받습니다. 전화번호, 개인 계정, 정확한 주소, 비밀, 일시적인 시간/장소를 공개하지 않습니다.
-8. `sceadu biography-self`, `sceadu biographies`, `sceadu refresh-biographies`로 확인한 뒤 설치된 skill을 사용합니다.
-
-## 문서
-
-- 설계 문서(중국어): https://edoxkf0rcr.feishu.cn/docx/Q9v6dLkF7oLxbrxncowcrDJInte
-- 테스트 계획: https://edoxkf0rcr.feishu.cn/docx/O6hOdqvqYoBA6DxkDSOcDJ2snud
-- 테니스 demo: [docs/demo-tennis.md](docs/demo-tennis.md)
-- 릴리스: [docs/release.md](docs/release.md)
+`node.rs`가 이 계층을 노드로 조합하고, `daemon.rs`가 CLI/MCP가 쓰는 로컬 Unix socket API를 제공합니다. 중앙 서버도 DHT도 없습니다. Bootstrap은 주소만 널리 알려진 일반 노드입니다.

@@ -40,3 +40,10 @@ sceadu skill path
 ```
 
 No Rust toolchain is installed on the target machines.
+
+## Release notes
+
+Use [release-changelog-template.md](release-changelog-template.md) for every
+GitHub Release, and keep [CHANGELOG.md](../CHANGELOG.md) in sync. The release
+notes must include highlights, compatibility, known limitations, and the
+verification checklist.

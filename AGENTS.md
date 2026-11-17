@@ -67,6 +67,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 - Tag format: `vMAJOR.MINOR.PATCH` for releases (current: `v0.1.3`), and `v0.1.0-buildYYYYMMDD` for test builds; at most one build tag per date.
 - `v0.1.3` is the current tagged release; `v0.1.0`, `v0.1.1`, and `v0.1.2` remain available. Test builds are private pre-releases. Assets are downloaded on a trusted machine and copied to hosts with `scp`.
 - Assets are static `x86_64-unknown-linux-musl` tarballs with `sceadu`, `install.sh`, `SKILL.md`, all README translations, `AGENTS.md`, and SHA-256. Target hosts do not need Rust.
+- Use `docs/release-changelog-template.md` for release notes and keep `CHANGELOG.md` in sync.
 - See `docs/release.md`.
 
 ## Design document sync

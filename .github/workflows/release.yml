@@ -29,7 +29,7 @@ jobs:
           rm -rf dist
           mkdir -p dist/sceadu
           cp target/x86_64-unknown-linux-musl/release/sceadu dist/sceadu/
-          cp README.md README.*.md AGENTS.md dist/sceadu/
+          cp README.md README.*.md AGENTS.md CHANGELOG.md dist/sceadu/
           cp scripts/install-release.sh dist/sceadu/install.sh
           cp skills/sceadu/SKILL.md dist/sceadu/SKILL.md
           chmod +x dist/sceadu/install.sh

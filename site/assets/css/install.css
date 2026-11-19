@@ -1,0 +1,469 @@
+/* Sceadu — install guide. Builds on site.css tokens and base styles. */
+
+.doc-hero {
+  position: relative;
+  padding: calc(var(--nav-h) + clamp(64px, 9vw, 110px)) 0 clamp(48px, 6vw, 72px);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.doc-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(48% 70% at 82% 20%, rgba(215, 255, 79, 0.07), transparent 68%),
+    linear-gradient(to bottom, transparent 60%, var(--bg));
+  pointer-events: none;
+}
+
+.doc-hero .wrap {
+  position: relative;
+  z-index: 1;
+}
+
+.doc-hero h1 {
+  max-width: 15ch;
+  font-size: clamp(2.7rem, 6.4vw, 6rem);
+  font-weight: 500;
+  line-height: 0.94;
+  letter-spacing: -0.05em;
+}
+
+.doc-hero h1 em {
+  font-style: normal;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(233, 236, 230, 0.72);
+}
+
+.doc-lede {
+  max-width: 60ch;
+  margin-top: 26px;
+  font-size: 1.02rem;
+  line-height: 1.72;
+  color: var(--muted);
+}
+
+.doc-lede a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 0.3em;
+}
+
+.doc-lede a:hover {
+  color: var(--accent);
+}
+
+.doc-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 30px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.doc-hero-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.doc-hero-meta span::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.doc-prompt {
+  position: relative;
+  max-width: 780px;
+  margin-top: 36px;
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(215, 255, 79, 0.34);
+  background:
+    linear-gradient(180deg, rgba(215, 255, 79, 0.055), transparent 50%),
+    var(--bg-2);
+}
+
+.doc-prompt .prompt-label {
+  display: flex;
+  justify-content: space-between;
+  padding-right: 78px;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.doc-prompt p {
+  max-width: 68ch;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.9;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+.doc-prompt p strong {
+  color: var(--fg);
+  font-weight: 400;
+}
+
+.doc-prompt .copy-btn {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+}
+
+.doc-main {
+  padding: clamp(52px, 7vw, 92px) 0 clamp(80px, 10vw, 130px);
+}
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 780px) 210px;
+  gap: clamp(40px, 6vw, 96px);
+  justify-content: center;
+  align-items: start;
+}
+
+.doc-content section {
+  padding: 0 0 clamp(40px, 5vw, 60px);
+  margin-bottom: clamp(40px, 5vw, 60px);
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: calc(var(--nav-h) + 30px);
+}
+
+.doc-content section:last-child {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+
+.doc-content h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 20px;
+  font-size: clamp(1.5rem, 2.4vw, 1.95rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.doc-content h2 .n {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.doc-content h3 {
+  margin: 30px 0 10px;
+  font-size: 1.02rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.doc-content p {
+  max-width: 68ch;
+  margin-bottom: 14px;
+  font-size: 0.95rem;
+  line-height: 1.72;
+  color: var(--muted);
+}
+
+.doc-content p strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.doc-content p:last-child {
+  margin-bottom: 0;
+}
+
+.doc-content a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 0.28em;
+}
+
+.doc-content a:hover {
+  color: var(--accent);
+}
+
+.doc-content code {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: 0.83em;
+  color: #cfd5cc;
+  overflow-wrap: anywhere;
+}
+
+.doc-content .code code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.doc-content ul,
+.doc-content ol {
+  max-width: 68ch;
+  margin: 0 0 16px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.93rem;
+  line-height: 1.7;
+}
+
+.doc-content ul {
+  list-style: square;
+}
+
+.doc-content ol {
+  list-style: decimal;
+}
+
+.doc-content li {
+  margin: 5px 0;
+  padding-left: 4px;
+}
+
+.doc-content li::marker {
+  color: var(--dim);
+}
+
+.doc-content li strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.doc-content .code {
+  margin: 12px 0 16px;
+}
+
+.doc-content .code pre {
+  padding: 14px 46px 14px 14px;
+  font-size: 11px;
+  line-height: 1.85;
+}
+
+.doc-content .code .copy-btn {
+  top: 8px;
+  right: 8px;
+}
+
+.callout {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-2);
+}
+
+.callout .ico {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--accent);
+}
+
+.callout p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.68;
+}
+
+.callout.warn {
+  border-left-color: #e6c07b;
+}
+
+.callout.warn .ico {
+  color: #e6c07b;
+}
+
+.doc-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  margin: 24px 0;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.doc-meta div {
+  padding: 14px 16px;
+  background: var(--bg);
+}
+
+.doc-meta dt {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.doc-meta dd {
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--fg);
+}
+
+.doc-content {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.doc-toc {
+  grid-column: 2;
+  grid-row: 1;
+  position: sticky;
+  top: calc(var(--nav-h) + 30px);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+}
+
+.doc-toc h2 {
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.doc-toc a {
+  display: block;
+  padding: 4px 0;
+  color: var(--muted);
+  transition:
+    color 0.2s,
+    padding 0.25s var(--ease);
+}
+
+.doc-toc a:hover {
+  color: var(--accent);
+  padding-left: 4px;
+}
+
+.doc-toc .soon {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+}
+
+.doc-toc .soon a {
+  color: var(--muted);
+}
+
+.doc-content .btn {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.doc-content .btn-primary {
+  color: var(--accent-ink);
+}
+
+.doc-content .btn-primary:hover {
+  color: var(--bg);
+}
+
+.doc-end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 30px;
+}
+
+.doc-end .btn {
+  min-height: 44px;
+  font-size: 9px;
+}
+
+@media (max-width: 980px) {
+  .doc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .doc-content {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .doc-toc {
+    grid-column: auto;
+    grid-row: auto;
+    position: static;
+    order: -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 20px;
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+  }
+
+  .doc-toc h2 {
+    grid-column: 1 / -1;
+    margin-bottom: 6px;
+  }
+
+  .doc-toc .soon {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .doc-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-toc {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-prompt p {
+    font-size: 10.5px;
+  }
+
+  .doc-content .code pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .doc-content h2 {
+    gap: 10px;
+  }
+}

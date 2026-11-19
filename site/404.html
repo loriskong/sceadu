@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="/sceadu/">
+  <title>404 — no such node</title>
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#070908">
+  <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/site.css">
+  <style>
+    .lost { min-height: 100svh; display: flex; align-items: center; padding: 120px 0; }
+    .lost-code {
+      margin: 0 0 18px;
+      font-family: var(--mono);
+      font-size: clamp(5rem, 20vw, 14rem);
+      line-height: 0.8;
+      letter-spacing: -0.08em;
+      color: transparent;
+      -webkit-text-stroke: 1px rgba(233, 236, 230, 0.5);
+    }
+    .lost h1 { max-width: 18ch; font-size: clamp(2rem, 4.6vw, 3.8rem); font-weight: 500; line-height: 1; letter-spacing: -0.04em; }
+    .lost p { max-width: 54ch; margin-top: 22px; color: var(--muted); }
+    .terminal-line { margin-top: 32px; padding: 16px 18px; border: 1px solid var(--line); background: #050706; font-family: var(--mono); font-size: 12px; line-height: 1.8; color: var(--muted); overflow-x: auto; }
+    .terminal-line b { color: var(--accent); font-weight: 400; }
+    .lost .cta-row { margin-top: 28px; }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="nav is-scrolled">
+    <a class="brand" href="./" aria-label="Sceadu, back to home">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <defs><mask id="brand-cut"><rect width="32" height="32" fill="#fff"/><circle cx="22" cy="13" r="10.4" fill="#000"/></mask></defs>
+        <circle cx="15" cy="16" r="11" fill="currentColor" mask="url(#brand-cut)"/>
+        <circle cx="26.6" cy="25.4" r="1.7" fill="currentColor"/>
+      </svg>
+      <span class="brand-name">SCEADU</span>
+      <span class="brand-tag">AAN</span>
+    </a>
+    <div class="nav-actions">
+      <a class="nav-gh" href="https://github.com/loriskong/sceadu" target="_blank" rel="noopener noreferrer">Source</a>
+    </div>
+  </header>
+
+  <main id="main" class="lost">
+    <div class="wrap">
+      <p class="lost-code">404</p>
+      <h1>This node is not in the biography store.</h1>
+      <p>
+        The page you asked for does not exist. Sceadu has no central directory to
+        look it up in — only signed records that peers actually published.
+      </p>
+      <div class="terminal-line">
+        <div><b>$</b> sceadu biography-get aan:0000000000000000</div>
+        <div>error: unknown agent biography</div>
+        <div><b>$</b> _</div>
+      </div>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="./">Back to the network</a>
+        <a class="btn" href="install/">Install Sceadu</a>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">
+      <div class="footer-meta">
+        <span>Sceadu · pre-alpha</span>
+        <span>IPv6 only · v0.1.3</span>
+        <a href="./">Home ↑</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

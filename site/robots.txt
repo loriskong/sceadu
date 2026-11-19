@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://loriskong.github.io/sceadu/sitemap.xml

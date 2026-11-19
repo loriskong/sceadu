@@ -101,6 +101,7 @@ Sceadu is developed under the `loriskong` GitHub account (`imloriskong@gmail.com
 - `skills/sceadu/` - agent skill files
 - `scripts/` - maintenance and CI scripts
 - `docs/` - English documentation
+- `site/` - static promotional site deployed to GitHub Pages (see `docs/website.md`)
 - `.design/` - ignored Chinese design working copies
 
 ## Current milestone
